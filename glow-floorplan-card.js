@@ -10,7 +10,7 @@
  * License: MIT
  */
 
-const VERSION = "1.4.1";
+const VERSION = "1.4.2";
 const CARD_TAG = "glow-floorplan-card";
 const EDITOR_TAG = "glow-floorplan-card-editor";
 
@@ -881,6 +881,98 @@ class Renderer {
     return faces.join("");
   }
 
+  /**
+   * Back-to-front order for the 3D boxes (walls and furniture). Sorting by the
+   * centre point alone breaks for long walls: a wall along the whole front of
+   * the house has its centre "behind" a cupboard near one end, so the cupboard
+   * was painted over the wall. Instead every pair whose shadows can overlap on
+   * screen is compared with a separating-axis test on the floor footprints:
+   * the box on the viewer's side of the separating line goes last. The result
+   * is a topological sort, with centre depth only as a tie-break.
+   */
+  paintOrder(items) {
+    const v = this.view3d();
+    const vd = [v.sin, v.cos]; // plan direction towards the viewer
+    const pd = [v.cos, -v.sin]; // plan direction of screen x
+    const n = items.length;
+    const proj = (pts, [ax, ay]) => {
+      let lo = Infinity;
+      let hi = -Infinity;
+      for (const [x, y] of pts) {
+        const d = x * ax + y * ay;
+        if (d < lo) lo = d;
+        if (d > hi) hi = d;
+      }
+      return [lo, hi];
+    };
+    const axes = (pts) => {
+      const out = [];
+      for (let i = 0; i < pts.length; i++) {
+        const [x1, y1] = pts[i];
+        const [x2, y2] = pts[(i + 1) % pts.length];
+        const L = Math.hypot(x2 - x1, y2 - y1);
+        if (L > 1e-6) out.push([-(y2 - y1) / L, (x2 - x1) / L]);
+      }
+      return out;
+    };
+    const info = items.map((it) => {
+      const f = it.foot || [];
+      const cx = f.reduce((a, p) => a + p[0], 0) / (f.length || 1);
+      const cy = f.reduce((a, p) => a + p[1], 0) / (f.length || 1);
+      return { f, c: [cx, cy], ax: axes(f), sx: proj(f, pd) };
+    });
+    // front(i, j): +1 if i must be painted after j, -1 if before, 0 if independent.
+    const front = (A, B) => {
+      // Shadows side by side on screen: they cannot cover each other.
+      if (A.sx[1] <= B.sx[0] + 0.5 || B.sx[1] <= A.sx[0] + 0.5) return 0;
+      let best = null;
+      for (const ax of [...A.ax, ...B.ax]) {
+        const along = ax[0] * vd[0] + ax[1] * vd[1];
+        if (Math.abs(along) < 1e-4) continue;
+        const [alo, ahi] = proj(A.f, ax);
+        const [blo, bhi] = proj(B.f, ax);
+        const pen = Math.min(ahi, bhi) - Math.max(alo, blo);
+        if (pen <= 0.01) {
+          // Separated: A sits on the +ax side when alo >= bhi.
+          const aPlus = alo >= bhi - 0.01;
+          return (aPlus ? 1 : -1) * Math.sign(along);
+        }
+        // Touching/overlapping footprints (wall corners, furniture pushed into a wall):
+        // keep the axis with the smallest overlap and decide by the centres along it.
+        if (!best || pen < best.pen) best = { pen, ax, along };
+      }
+      if (!best) return 0;
+      const ca = A.c[0] * best.ax[0] + A.c[1] * best.ax[1];
+      const cb = B.c[0] * best.ax[0] + B.c[1] * best.ax[1];
+      if (Math.abs(ca - cb) < 0.01) return 0;
+      return (ca > cb ? 1 : -1) * Math.sign(best.along);
+    };
+    const after = items.map(() => []); // after[j] = items that must come after j
+    const indeg = new Array(n).fill(0);
+    for (let i = 0; i < n; i++) {
+      if (!info[i].f.length) continue;
+      for (let j = i + 1; j < n; j++) {
+        if (!info[j].f.length) continue;
+        const r = front(info[i], info[j]);
+        if (r > 0) { after[j].push(i); indeg[i]++; }
+        else if (r < 0) { after[i].push(j); indeg[j]++; }
+      }
+    }
+    // Kahn's algorithm, always taking the ready item furthest back; if a cycle
+    // remains (should not happen), fall back to the furthest-back item left.
+    const done = new Array(n).fill(false);
+    const out = [];
+    for (let k = 0; k < n; k++) {
+      let pick = -1;
+      for (let i = 0; i < n; i++) if (!done[i] && indeg[i] === 0 && (pick < 0 || items[i].d < items[pick].d)) pick = i;
+      if (pick < 0) for (let i = 0; i < n; i++) if (!done[i] && (pick < 0 || items[i].d < items[pick].d)) pick = i;
+      done[pick] = true;
+      out.push(items[pick]);
+      for (const m of after[pick]) indeg[m]--;
+    }
+    return out;
+  }
+
   svg3d() {
     const v = this.view3d();
     const P = this.parts();
@@ -907,7 +999,7 @@ class Renderer {
         const sill = v.wallH * 0.32;
         svg = this.prism(foot, 0, sill, wallCol) + this.prism(foot, sill, v.wallH, glassCol, { sideExtra: 'fill-opacity="0.45"', topExtra: 'fill-opacity="0.6"' });
       } else svg = this.prism(foot, 0, v.wallH, wallCol);
-      items.push({ d: v.depth((ax + bx) / 2, (ay + by) / 2), svg });
+      items.push({ d: v.depth((ax + bx) / 2, (ay + by) / 2), foot, svg });
     }
 
     const q = P.q;
@@ -928,7 +1020,7 @@ class Renderer {
           bands.push({ d: v.depth(mid[0], mid[1]), svg: this.prism(pts, 0, (z / n) * (i + 1), { top: q.soft, side: q.side, side2: q.side2, edge: q.line }) });
         }
         bands.sort((a, b) => a.d - b.d);
-        items.push({ d: v.depth(cx, cy), svg: bands.map((b) => b.svg).join("") });
+        items.push({ d: v.depth(cx, cy), foot: furnitureCorners(f, w, h), svg: bands.map((b) => b.svg).join("") });
         return;
       }
       let corners = furnitureCorners(f, w, h);
@@ -938,10 +1030,10 @@ class Renderer {
       }
       const body = this.prism(corners, 0, z, furnCol, { noTop: true });
       const top = `<g transform="${v.matrix(z)}"><g transform="${furnitureTransform(f, w, h)}">${furnitureDrawing(f.type, w, h, q, "top")}</g></g>`;
-      items.push({ d: v.depth(cx, cy), svg: body + top });
+      items.push({ d: v.depth(cx, cy), foot: furnitureCorners(f, w, h), svg: body + top });
     });
 
-    items.sort((a, b) => a.d - b.d);
+    const ordered = this.paintOrder(items);
     const [vx, vy, vw, vh] = v.vb;
     const labels = P.labels
       .map((l) => {
@@ -960,7 +1052,7 @@ class Renderer {
         <g>${P.pulses.join("")}</g>
         <g>${P.hits.join("")}</g>
       </g>
-      <g pointer-events="none">${items.map((i) => i.svg).join("")}</g>
+      <g pointer-events="none">${ordered.map((i) => i.svg).join("")}</g>
       <g pointer-events="none" style="paint-order:stroke" stroke="${night ? "rgba(20,24,34,.55)" : "rgba(255,255,255,.75)"}" stroke-width="5">${labels}</g>
     </svg>`;
   }
