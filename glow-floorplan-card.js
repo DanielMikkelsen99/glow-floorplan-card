@@ -10,7 +10,7 @@
  * License: MIT
  */
 
-const VERSION = "1.3.1";
+const VERSION = "1.4.0";
 const CARD_TAG = "glow-floorplan-card";
 const EDITOR_TAG = "glow-floorplan-card-editor";
 
@@ -151,9 +151,41 @@ function bbox(pts) {
   return { minX, minY, maxX, maxY, w: maxX - minX, h: maxY - minY, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 };
 }
 
+const FLOOR_KEYS = ["rooms", "devices", "openings", "doors", "furniture"];
+
+/**
+ * A config can hold one plan (rooms, devices … at the top level) or several
+ * floors (`floors: [{ name, rooms, devices, … }]`). Internally there is always
+ * a `floors` list; the top-level arrays point at the first floor.
+ */
 function normalizeConfig(config) {
   const c = clone(config || {});
   c.size = Array.isArray(c.size) && c.size.length === 2 ? c.size.map(Number) : [850, 1250];
+  const src = Array.isArray(c.floors) && c.floors.length
+    ? c.floors
+    : [{ name: c.floor_name || "Stueetage", rooms: c.rooms, devices: c.devices, openings: c.openings, doors: c.doors, furniture: c.furniture }];
+  c.floors = src.map((f, i) => normalizeFloor({ ...f, name: (f && f.name) || `Etage ${i + 1}` }));
+  FLOOR_KEYS.forEach((k) => (c[k] = c.floors[0][k]));
+  return c;
+}
+
+function floorIndexOf(c, want) {
+  if (want === undefined || want === null || want === "") return 0;
+  if (typeof want === "number") return Math.max(0, Math.min(c.floors.length - 1, want));
+  const i = c.floors.findIndex((f) => f.name === want || f.id === want);
+  return i < 0 ? 0 : i;
+}
+
+/** The config the renderer sees for one floor (shared settings + that floor's arrays). */
+function floorView(c, idx) {
+  const f = c.floors[Math.max(0, Math.min(c.floors.length - 1, idx))];
+  const v = { ...c };
+  FLOOR_KEYS.forEach((k) => (v[k] = f[k]));
+  return v;
+}
+
+function normalizeFloor(f) {
+  const c = { ...(f || {}) };
   c.rooms = Array.isArray(c.rooms) ? c.rooms : [];
   c.devices = Array.isArray(c.devices) ? c.devices : [];
   c.openings = (Array.isArray(c.openings) ? c.openings : [])
@@ -173,6 +205,17 @@ function normalizeConfig(config) {
   return c;
 }
 
+/** Tidy one floor for YAML output: drop empty lists and generated ids. */
+function cleanFloor(f) {
+  const out = clone(f);
+  out.rooms.forEach((r) => {
+    if (!r.motion || !r.motion.length) delete r.motion;
+    if (r.id === slug(r.name)) delete r.id;
+  });
+  ["openings", "doors", "furniture"].forEach((k) => out[k] && !out[k].length && delete out[k]);
+  return out;
+}
+
 /* ------------------------------------------------------------------ */
 /* Furniture (static, drawn top-down like an architect's plan)          */
 /* ------------------------------------------------------------------ */
@@ -185,13 +228,17 @@ const FURNITURE = {
   sofa_3: { name: "Sofa, 3 pers.", w: 190, h: 75, z: 60 },
   sofa_corner: { name: "Hjørnesofa", w: 190, h: 160, z: 60 },
   armchair: { name: "Lænestol", w: 70, h: 70, z: 60 },
-  dining_table: { name: "Spisebord", w: 165, h: 100, z: 55, chairs: true },
+  dining_table: { name: "Spisebord", w: 165, h: 100, z: 55, chairs: true, inset: [18, 18, 18, 18] },
+  desk: { name: "Skrivebord m. kontorstol", w: 120, h: 100, z: 60, chairs: true, inset: [0, 0, 0, 42] },
   coffee_table: { name: "Sofabord", w: 95, h: 50, z: 32 },
   dresser: { name: "Kommode", w: 85, h: 40, z: 70 },
   cabinet: { name: "Skab", w: 85, h: 50, z: 150 },
   toilet: { name: "Toilet", w: 35, h: 55, z: 35 },
   shower: { name: "Bruser", w: 75, h: 75, z: 3 },
   kitchen_counter: { name: "Køkkenbord", w: 200, h: 50, z: 75 },
+  washing_machine: { name: "Vaskemaskine", w: 50, h: 50, z: 70 },
+  dryer: { name: "Tørretumbler", w: 50, h: 50, z: 70 },
+  stairs: { name: "Trappe", w: 80, h: 230, z: 95, stairs: true },
 };
 
 const FURN_PALETTE = {
@@ -274,6 +321,44 @@ function furnitureDrawing(type, w, h, q, part = "all") {
       if (part !== "floor") out.push(R(c, c, w - 2 * c, h - 2 * c, q.wood, 4));
       break;
     }
+    case "desk": {
+      const dh = h - 42;
+      if (part !== "top") {
+        // Office chair: round seat, backrest and a five-star base hint.
+        const cx = w / 2;
+        const cy = dh + 22;
+        out.push(`<circle cx="${cx}" cy="${cy}" r="15" fill="${q.accent}" stroke="${q.line}" stroke-width="1.5"/>`);
+        out.push(R(cx - 15, cy + 10, 30, 8, q.accent, 4));
+        out.push(`<circle cx="${cx}" cy="${cy}" r="9" fill="${q.fur}" stroke="${q.line}" stroke-width="1.2"/>`);
+      }
+      if (part !== "floor") {
+        out.push(R(0, 0, w, dh, q.wood, 3));
+        out.push(R(w * 0.3, dh * 0.15, w * 0.4, dh * 0.12, q.metal, 2));
+        out.push(R(w * 0.32, dh * 0.45, w * 0.36, dh * 0.22, q.fur, 2, 'stroke-opacity="0.8"'));
+      }
+      break;
+    }
+    case "washing_machine":
+    case "dryer": {
+      out.push(R(0, 0, w, h, q.fur, 5));
+      out.push(R(3, 3, w - 6, h * 0.16, q.soft, 3));
+      out.push(C(w * 0.78, h * 0.11, Math.max(1.5, w * 0.035), q.metal));
+      const r = Math.min(w, h) * 0.3;
+      out.push(C(w / 2, h * 0.58, r, q.metal));
+      if (type === "washing_machine") out.push(C(w / 2, h * 0.58, r * 0.62, q.soft));
+      else for (const dy of [-0.35, 0, 0.35]) out.push(L(w / 2 - r * 0.55, h * 0.58 + r * dy, w / 2 + r * 0.55, h * 0.58 + r * dy));
+      break;
+    }
+    case "stairs": {
+      // Steps run along the depth; the arrow points up the stairs (towards y = 0).
+      out.push(R(0, 0, w, h, q.soft, 2));
+      const n = Math.max(3, Math.round(h / 22));
+      for (let i = 1; i < n; i++) out.push(L(0, (h / n) * i, w, (h / n) * i));
+      out.push(`<line x1="${w / 2}" y1="${h - 8}" x2="${w / 2}" y2="12" stroke="${q.line}" stroke-width="2.5"/>`);
+      out.push(`<polyline points="${w / 2 - 9},22 ${w / 2},10 ${w / 2 + 9},22" fill="none" stroke="${q.line}" stroke-width="2.5" stroke-linejoin="round"/>`);
+      out.push(C(w / 2, h - 10, 4, q.line));
+      break;
+    }
     case "coffee_table":
       out.push(R(0, 0, w, h, q.wood, 8));
       out.push(R(5, 5, w - 10, h - 10, "none", 5, 'stroke-opacity="0.5"'));
@@ -322,6 +407,14 @@ function furnitureDrawing(type, w, h, q, part = "all") {
 /** 2D placement transform: x, y is the top-left corner before rotation; rotation is about the centre. */
 function furnitureTransform(f, w, h) {
   return `translate(${f.x} ${f.y}) rotate(${Number(f.rotation) || 0} ${w / 2} ${h / 2})`;
+}
+
+/** World position of a local point of a piece. */
+function furnitureLocalToWorld(f, w, h, lx, ly) {
+  const a = ((Number(f.rotation) || 0) * Math.PI) / 180;
+  const dx = lx - w / 2;
+  const dy = ly - h / 2;
+  return [f.x + w / 2 + dx * Math.cos(a) - dy * Math.sin(a), f.y + h / 2 + dx * Math.sin(a) + dy * Math.cos(a)];
 }
 
 /** World corners of a piece (clockwise from its local top-left). */
@@ -378,6 +471,19 @@ const STYLES = `
   }
   .viewbtn span { padding: 5px 9px; border-radius: 999px; color: rgba(255,255,255,0.85); }
   .viewbtn span.on { background: rgba(255,255,255,0.9); color: #2e3442; }
+  .floorbar {
+    position: absolute; top: 10px; left: 10px; z-index: 2; display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 3px; max-width: 70%;
+    border: 1px solid rgba(255,255,255,0.35); border-radius: 18px;
+    background: rgba(30,36,52,0.35); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  }
+  .floorbar button {
+    position: relative; border: 0; background: transparent; color: rgba(255,255,255,0.85); cursor: pointer;
+    font: 600 12px/1 Helvetica, Arial, sans-serif; padding: 6px 10px; border-radius: 999px;
+  }
+  .floorbar button.on { background: rgba(255,255,255,0.9); color: #2e3442; }
+  .floorbar .dot { position: absolute; top: 3px; right: 3px; width: 7px; height: 7px; border-radius: 50%; }
+  .floorbar .dot.lit { background: #ffc107; box-shadow: 0 0 6px #ffc107; }
+  .floorbar .dot.motion { background: #7fd3ff; box-shadow: 0 0 6px #7fd3ff; animation: gfp-pulse 1.6s ease-in-out infinite; }
   @media (prefers-reduced-motion: reduce) { .pulse, .ring { animation: none; opacity: .6; } }
 `;
 
@@ -443,21 +549,24 @@ class Renderer {
       </linearGradient>
       <filter id="sh-${u}" x="-10%" y="-10%" width="130%" height="130%">
         <feDropShadow dx="8" dy="10" stdDeviation="6" flood-color="#000" flood-opacity="${p.shadow}"/>
+      </filter>
+      <filter id="shw-${u}" x="-5%" y="-5%" width="110%" height="110%">
+        <feDropShadow dx="1.5" dy="2.5" stdDeviation="1.8" flood-color="#000" flood-opacity="${(p.shadow * 0.5).toFixed(2)}"/>
       </filter>`);
 
     c.rooms.forEach((r, i) => {
       if (r.points.length < 3) return;
       const pts = r.points.map((v) => v.join(",")).join(" ");
       out.defs.push(`<clipPath id="cp-${u}-${i}"><polygon points="${pts}"/></clipPath>`);
-      out.floor.push(`<polygon points="${pts}" fill="url(#f-${u})" stroke="${p.wall}" stroke-width="${this.is3d ? 2 : c.wall_width || 24}" stroke-linejoin="miter"/>`);
+      // Walls are drawn separately (same geometry as in 3D), so floors get only a hairline.
+      out.floor.push(`<polygon points="${pts}" fill="url(#f-${u})" stroke="${p.floorB}" stroke-width="1.5" stroke-linejoin="miter"/>`);
     });
 
     out.openings = c.openings
       .map((o) => {
         const [x1, y1, x2, y2] = o.line;
         const w = o.width || (c.wall_width || 24) + 2;
-        return (this.is3d ? "" : `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${p.opening}" stroke-width="${w}"/>`) +
-          (o.dashed === false ? "" : `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${p.dash}" stroke-width="2" stroke-dasharray="8 8"/>`);
+        return (o.dashed === false ? "" : `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${p.dash}" stroke-width="2" stroke-dasharray="8 8"/>`);
       })
       .join("");
 
@@ -541,20 +650,42 @@ class Renderer {
     return `<text x="${x}" y="${y}" font-family="Helvetica,Arial,sans-serif" font-size="${this.c.label_size || 28}" font-weight="600" fill="${p.text}" text-anchor="middle" dominant-baseline="middle">${esc(text)}</text>`;
   }
 
+  /** 2D walls: the same merged wall pieces as the 3D view, as filled bands drawn over the light. */
+  walls2d(p) {
+    const t = (this.c.wall_width || 24) * 0.55;
+    return this.wallSegments()
+      .filter((sg) => sg.kind !== "gap")
+      .map((sg) => {
+        const [ax, ay] = sg.a;
+        const [bx, by] = sg.b;
+        const L = Math.hypot(bx - ax, by - ay) || 1;
+        const th = sg.thick || t;
+        const nx = (-(by - ay) / L) * (th / 2);
+        const ny = ((bx - ax) / L) * (th / 2);
+        const pts = [[ax + nx, ay + ny], [bx + nx, by + ny], [bx - nx, by - ny], [ax - nx, ay - ny]].map((q) => q.map((n) => n.toFixed(1)).join(",")).join(" ");
+        return `<polygon points="${pts}" fill="${sg.kind === "glass" ? p.opening : p.wall}"/>`;
+      })
+      .join("");
+  }
+
   svg() {
     if (this.is3d) return this.svg3d();
     const [W, H] = this.c.size;
     const P = this.parts();
     const u = this.uid;
+    // Pulses only (robot rings go above the walls).
+    const roomPulses = P.pulses.filter((x) => x.startsWith('<g class="pulse">'));
+    const otherPulses = P.pulses.filter((x) => !x.startsWith('<g class="pulse">'));
     return `<svg class="plan" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet">
       <defs>${P.defs.join("")}</defs>
       <g filter="url(#sh-${u})">${P.floor.join("")}</g>
-      ${P.openings}
-      ${P.doorBack}
       <g pointer-events="none">${P.furniture.join("")}</g>
       <g>${P.glow.join("")}</g>
+      <g>${roomPulses.join("")}</g>
+      <g filter="url(#shw-${u})">${this.walls2d(P.p)}</g>
+      ${P.openings}
       ${P.doorFront}
-      <g>${P.pulses.join("")}</g>
+      <g>${otherPulses.join("")}</g>
       <g pointer-events="none">${P.labels.map((l) => this.labelSvg(l.x, l.y, l.text, P.p)).join("")}</g>
       <g>${P.hits.join("")}</g>
     </svg>`;
@@ -784,14 +915,29 @@ class Renderer {
     this.c.furniture.forEach((f) => {
       const [w, h, spec] = furnitureSize(f);
       const z = spec.z;
+      const [cx, cy] = [f.x + w / 2, f.y + h / 2];
+      if (spec.stairs) {
+        // Real steps: each band is a little higher than the one in front of it.
+        const n = Math.max(3, Math.round(h / 22));
+        const bands = [];
+        for (let i = 0; i < n; i++) {
+          const y1 = h - (h / n) * (i + 1);
+          const y2 = h - (h / n) * i;
+          const pts = [[0, y1], [w, y1], [w, y2], [0, y2]].map(([lx, ly]) => furnitureLocalToWorld(f, w, h, lx, ly));
+          const mid = furnitureLocalToWorld(f, w, h, w / 2, (y1 + y2) / 2);
+          bands.push({ d: v.depth(mid[0], mid[1]), svg: this.prism(pts, 0, (z / n) * (i + 1), { top: q.soft, side: q.side, side2: q.side2, edge: q.line }) });
+        }
+        bands.sort((a, b) => a.d - b.d);
+        items.push({ d: v.depth(cx, cy), svg: bands.map((b) => b.svg).join("") });
+        return;
+      }
       let corners = furnitureCorners(f, w, h);
-      if (spec.chairs) {
-        const c = 18;
-        corners = furnitureCorners({ ...f, x: f.x + c, y: f.y + c }, w - 2 * c, h - 2 * c);
+      if (spec.inset) {
+        const [l, t2, r2, b2] = spec.inset;
+        corners = [[l, t2], [w - r2, t2], [w - r2, h - b2], [l, h - b2]].map(([lx, ly]) => furnitureLocalToWorld(f, w, h, lx, ly));
       }
       const body = this.prism(corners, 0, z, furnCol, { noTop: true });
       const top = `<g transform="${v.matrix(z)}"><g transform="${furnitureTransform(f, w, h)}">${furnitureDrawing(f.type, w, h, q, "top")}</g></g>`;
-      const [cx, cy] = [f.x + w / 2, f.y + h / 2];
       items.push({ d: v.depth(cx, cy), svg: body + top });
     });
 
@@ -808,7 +954,6 @@ class Renderer {
       <g transform="${v.matrix(0)}">
         <g filter="url(#sh-${u})">${P.floor.join("")}</g>
         ${P.openings}
-        ${P.doorBack}
         <g pointer-events="none">${P.furnitureFloor.join("")}</g>
         <g>${P.glow.join("")}</g>
         ${P.doorFront}
@@ -1130,11 +1275,53 @@ class GlowFloorplanCard extends HTMLElement {
     this._render(true);
   }
 
+  _floorKey() {
+    return `glow-floorplan-floor:${location.pathname}`;
+  }
+
+  _currentFloor() {
+    const c = this._config;
+    if (this._floor === undefined) {
+      let saved = null;
+      try {
+        saved = window.localStorage.getItem(this._floorKey());
+      } catch (e) {
+        /* ignore */
+      }
+      const byName = saved !== null ? c.floors.findIndex((f) => f.name === saved) : -1;
+      this._floor = byName >= 0 ? byName : floorIndexOf(c, c.default_floor);
+    }
+    return Math.max(0, Math.min(c.floors.length - 1, this._floor));
+  }
+
+  _setFloor(i) {
+    this._floor = i;
+    try {
+      window.localStorage.setItem(this._floorKey(), this._config.floors[i].name);
+    } catch (e) {
+      /* ignore */
+    }
+    this._render(true);
+  }
+
+  /** Light on / motion on per floor, for the little dots on the floor buttons. */
+  _floorActivity(i) {
+    const f = this._config.floors[i];
+    const st = (id) => this._hass.states[id];
+    const lit = f.devices.some((d) => (d.glow === undefined ? domainOf(d.entity) === "light" : d.glow) && isOn(st(d.entity)));
+    const motion = f.rooms.some((r) => r.motion.some((m) => isOn(st(m))));
+    return { lit, motion };
+  }
+
   _render(force) {
     if (!this._config || !this._hass) return;
     const view = this._config.view_toggle === false ? (this._config.view === "3d" ? "3d" : "2d") : this._currentView();
-    const r = new Renderer(this._config, this._hass, { uid: this._uid, is3d: view === "3d" });
-    const sig = r.signature() + view;
+    const fi = this._currentFloor();
+    this._fv = floorView(this._config, fi);
+    const r = new Renderer(this._fv, this._hass, { uid: this._uid, is3d: view === "3d" });
+    let sig = view + fi + r.signature();
+    if (this._config.floors.length > 1)
+      this._config.floors.forEach((_, i) => i !== fi && (sig += new Renderer(floorView(this._config, i), this._hass).signature()));
     if (!force && sig === this._sig) return;
     this._sig = sig;
     const fr = r.frame();
@@ -1142,16 +1329,23 @@ class GlowFloorplanCard extends HTMLElement {
     const title = this._config.title ? `<h1 class="card-header">${esc(this._config.title)}</h1>` : "";
     const toggle = this._config.view_toggle === false ? "" :
       `<button class="viewbtn" title="Skift mellem 2D og 3D"><span class="${view === "2d" ? "on" : ""}">2D</span><span class="${view === "3d" ? "on" : ""}">3D</span></button>`;
+    const floors = this._config.floors.length < 2 ? "" :
+      `<div class="floorbar">${this._config.floors.map((f, i) => {
+        const a = i === fi ? { lit: false, motion: false } : this._floorActivity(i);
+        const dot = a.motion ? `<i class="dot motion"></i>` : a.lit ? `<i class="dot lit"></i>` : "";
+        return `<button data-floor="${i}" class="${i === fi ? "on" : ""}">${esc(f.name)}${dot}</button>`;
+      }).join("")}</div>`;
     this.shadowRoot.innerHTML = `<style>${STYLES}</style>
       <ha-card>${title}${err}
         <div class="outer">
-          ${toggle}
+          ${floors}${toggle}
           <div class="wrap" style="aspect-ratio:${fr.ratio}">
             ${r.svg()}
             <div class="layer">${r.devicesHtml()}</div>
           </div>
         </div>
       </ha-card>`;
+    this.shadowRoot.querySelectorAll(".floorbar button").forEach((b) => b.addEventListener("click", () => this._setFloor(Number(b.dataset.floor))));
     const btn = this.shadowRoot.querySelector(".viewbtn");
     if (btn) btn.addEventListener("click", () => this._toggleView());
     this._bind();
@@ -1160,7 +1354,7 @@ class GlowFloorplanCard extends HTMLElement {
   _bind() {
     const root = this.shadowRoot;
     root.querySelectorAll(".dev").forEach((el) => {
-      const d = this._config.devices[Number(el.dataset.dev)];
+      const d = this._fv.devices[Number(el.dataset.dev)];
       if (!d) return;
       const cfg = {
         entity: d.entity,
@@ -1176,13 +1370,13 @@ class GlowFloorplanCard extends HTMLElement {
       );
     });
     root.querySelectorAll(".room-hit[data-door]").forEach((el) => {
-      const d = this._config.doors[Number(el.dataset.door)];
+      const d = this._fv.doors[Number(el.dataset.door)];
       if (!d || !d.sensor) return;
       const cfg = { entity: d.sensor, tap_action: d.tap_action || { action: "more-info" } };
       bindPress(el, () => this._act(cfg, "tap"));
     });
     root.querySelectorAll(".room-hit[data-room]").forEach((el) => {
-      const room = this._config.rooms[Number(el.dataset.room)];
+      const room = this._fv.rooms[Number(el.dataset.room)];
       if (!room) return;
       const cfg = {
         entity: room.entity,
@@ -1293,7 +1487,25 @@ class GlowFloorplanCardEditor extends HTMLElement {
   setConfig(config) {
     this._raw = config;
     if (this._dragging) return;
-    this._config = normalizeConfig(config);
+    this._full = normalizeConfig(config);
+    if (this._floorIdx === undefined) this._floorIdx = floorIndexOf(this._full, this._full.default_floor);
+    this._floorIdx = Math.max(0, Math.min(this._full.floors.length - 1, this._floorIdx));
+    this._config = floorView(this._full, this._floorIdx);
+    this._render();
+  }
+
+  /** Copy card-wide settings edited on the floor view back to the full config. */
+  _syncGlobals() {
+    for (const [k, v] of Object.entries(this._config)) if (!FLOOR_KEYS.includes(k) && k !== "floors") this._full[k] = v;
+    for (const k of Object.keys(this._full)) if (!FLOOR_KEYS.includes(k) && k !== "floors" && !(k in this._config)) delete this._full[k];
+  }
+
+  _switchFloor(i) {
+    this._syncGlobals();
+    this._floorIdx = Math.max(0, Math.min(this._full.floors.length - 1, i));
+    this._config = floorView(this._full, this._floorIdx);
+    this._sel = null;
+    this._confirmDel = false;
     this._render();
   }
 
@@ -1304,14 +1516,20 @@ class GlowFloorplanCardEditor extends HTMLElement {
   }
 
   _emit() {
-    const out = clone(this._config);
-    out.rooms.forEach((r) => {
-      if (!r.motion.length) delete r.motion;
-      if (r.id === slug(r.name)) delete r.id;
-    });
-    if (!out.openings.length) delete out.openings;
-    if (!out.doors.length) delete out.doors;
-    if (!out.furniture.length) delete out.furniture;
+    this._syncGlobals();
+    const out = {};
+    for (const [k, v] of Object.entries(this._full)) if (!FLOOR_KEYS.includes(k) && k !== "floors") out[k] = clone(v);
+    const floors = this._full.floors.map(cleanFloor);
+    if (floors.length === 1 && !(this._raw && this._raw.floors)) {
+      // Keep the simple single-plan format.
+      const { name, ...rest } = floors[0];
+      Object.assign(out, rest);
+      if (name && name !== "Stueetage") out.floor_name = name;
+      else delete out.floor_name;
+    } else {
+      out.floors = floors;
+      delete out.floor_name;
+    }
     out.type = (this._raw && this._raw.type) || `custom:${CARD_TAG}`;
     fireEvent(this, "config-changed", { config: out });
   }
@@ -1357,6 +1575,14 @@ class GlowFloorplanCardEditor extends HTMLElement {
           </div>
           <span style="flex:1"></span>${add}
         </div>
+        <div class="bar">
+          <span class="hint">Etage</span>
+          <select class="floorsel">${this._full.floors.map((f, i) => `<option value="${i}" ${i === this._floorIdx ? "selected" : ""}>${esc(f.name)}</option>`).join("")}</select>
+          <input class="floorname" value="${esc(this._full.floors[this._floorIdx].name)}" title="Navn på etagen" style="width:110px;font:inherit;font-size:13px;padding:6px 8px;border-radius:8px;border:1px solid var(--divider-color,#ccc);background:var(--card-background-color,#fff);color:var(--primary-text-color)">
+          ${this._full.floors.length > 1 ? `<button data-act="floor-left" title="Flyt etagen til venstre">◀</button><button data-act="floor-right" title="Flyt etagen til højre">▶</button>` : ""}
+          <button data-act="add-floor">+ Etage</button>
+          ${this._full.floors.length > 1 ? `<button data-act="del-floor" class="danger">${this._confirmDel ? "Bekræft: slet etage" : "Slet etage"}</button>` : ""}
+        </div>
         <div class="hint">${HINTS[m]}</div>
         <div class="stage"></div>
         <div class="panelwrap">${this._panel()}</div>
@@ -1383,6 +1609,18 @@ class GlowFloorplanCardEditor extends HTMLElement {
       })
     );
     root.querySelectorAll(".bar [data-act]").forEach((b) => b.addEventListener("click", () => this._action(b.dataset.act)));
+    const fsel = root.querySelector(".floorsel");
+    if (fsel) fsel.addEventListener("change", () => this._switchFloor(Number(fsel.value)));
+    const fname = root.querySelector(".floorname");
+    if (fname)
+      fname.addEventListener("change", () => {
+        const f = this._full.floors[this._floorIdx];
+        const old = f.name;
+        f.name = fname.value.trim() || old;
+        if (this._config.default_floor === old) this._config.default_floor = f.name;
+        this._emit();
+        this._render();
+      });
     const addf = root.querySelector(".addfurn");
     if (addf) addf.addEventListener("change", () => addf.value && this._addFurniture(addf.value));
     root.querySelectorAll("[data-g]").forEach((inp) => inp.addEventListener("change", () => this._globalField(inp.dataset.g, inp)));
@@ -2236,6 +2474,39 @@ class GlowFloorplanCardEditor extends HTMLElement {
     if (act === "del-op" && this._sel) {
       c.openings.splice(this._sel.i, 1);
       this._sel = null;
+    }
+    if (act === "add-floor") {
+      const fl = this._full.floors;
+      // The plan that exists today stays the default floor.
+      if (this._config.default_floor === undefined) this._config.default_floor = fl[this._floorIdx].name;
+      let n = fl.length + 1;
+      while (fl.some((f) => f.name === `Etage ${n}`)) n++;
+      fl.splice(this._floorIdx + 1, 0, normalizeFloor({ name: `Etage ${n}` }));
+      this._emit();
+      this._switchFloor(this._floorIdx + 1);
+      return;
+    }
+    if (act === "del-floor") {
+      if (!this._confirmDel) {
+        this._confirmDel = true;
+        this._render();
+        return;
+      }
+      const fl = this._full.floors;
+      const gone = fl.splice(this._floorIdx, 1)[0];
+      if (this._config.default_floor === gone.name) delete this._config.default_floor;
+      this._emit();
+      this._switchFloor(Math.max(0, this._floorIdx - 1));
+      return;
+    }
+    if (act === "floor-left" || act === "floor-right") {
+      const fl = this._full.floors;
+      const j = this._floorIdx + (act === "floor-left" ? -1 : 1);
+      if (j < 0 || j >= fl.length) return;
+      [fl[this._floorIdx], fl[j]] = [fl[j], fl[this._floorIdx]];
+      this._emit();
+      this._switchFloor(j);
+      return;
     }
     if (act === "deselect") this._sel = null;
     if (act !== "deselect") this._emit();
