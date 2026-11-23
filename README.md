@@ -169,7 +169,7 @@ floors:
     furniture: [...]
 ```
 
-With more than one floor the card shows floor buttons in the top-left corner; a dot shows lights (yellow) or motion (blue) on another floor. In the editor, pick a floor, rename it, move it left/right, add or delete floors. A single plan without `floors` keeps working unchanged.
+The card always opens on `default_floor` (pick it with **★ Standard** in the editor); add `remember_floor: true` to reopen the floor that was used last instead. With more than one floor the card shows floor buttons in the top-left corner; a dot shows lights (yellow) or motion (blue) on another floor. In the editor, pick a floor, rename it, move it left/right, add or delete floors. A single plan without `floors` keeps working unchanged.
 
 ### Same plan on several dashboards
 

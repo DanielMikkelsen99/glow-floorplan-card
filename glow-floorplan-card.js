@@ -10,7 +10,7 @@
  * License: MIT
  */
 
-const VERSION = "1.4.0";
+const VERSION = "1.4.1";
 const CARD_TAG = "glow-floorplan-card";
 const EDITOR_TAG = "glow-floorplan-card-editor";
 
@@ -1282,12 +1282,14 @@ class GlowFloorplanCard extends HTMLElement {
   _currentFloor() {
     const c = this._config;
     if (this._floor === undefined) {
+      // Opens on the chosen standard floor; remember_floor: true reopens the last one used instead.
       let saved = null;
-      try {
-        saved = window.localStorage.getItem(this._floorKey());
-      } catch (e) {
-        /* ignore */
-      }
+      if (c.remember_floor)
+        try {
+          saved = window.localStorage.getItem(this._floorKey());
+        } catch (e) {
+          /* ignore */
+        }
       const byName = saved !== null ? c.floors.findIndex((f) => f.name === saved) : -1;
       this._floor = byName >= 0 ? byName : floorIndexOf(c, c.default_floor);
     }
@@ -1577,9 +1579,10 @@ class GlowFloorplanCardEditor extends HTMLElement {
         </div>
         <div class="bar">
           <span class="hint">Etage</span>
-          <select class="floorsel">${this._full.floors.map((f, i) => `<option value="${i}" ${i === this._floorIdx ? "selected" : ""}>${esc(f.name)}</option>`).join("")}</select>
+          <select class="floorsel">${this._full.floors.map((f, i) => `<option value="${i}" ${i === this._floorIdx ? "selected" : ""}>${i === floorIndexOf(this._config, this._config.default_floor) && this._full.floors.length > 1 ? "★ " : ""}${esc(f.name)}</option>`).join("")}</select>
           <input class="floorname" value="${esc(this._full.floors[this._floorIdx].name)}" title="Navn på etagen" style="width:110px;font:inherit;font-size:13px;padding:6px 8px;border-radius:8px;border:1px solid var(--divider-color,#ccc);background:var(--card-background-color,#fff);color:var(--primary-text-color)">
           ${this._full.floors.length > 1 ? `<button data-act="floor-left" title="Flyt etagen til venstre">◀</button><button data-act="floor-right" title="Flyt etagen til højre">▶</button>` : ""}
+          ${this._full.floors.length > 1 ? `<button data-act="default-floor" class="${floorIndexOf(this._config, this._config.default_floor) === this._floorIdx ? "on" : ""}" title="Etagen der vises, når plantegningen åbnes">★ Standard</button>` : ""}
           <button data-act="add-floor">+ Etage</button>
           ${this._full.floors.length > 1 ? `<button data-act="del-floor" class="danger">${this._confirmDel ? "Bekræft: slet etage" : "Slet etage"}</button>` : ""}
         </div>
@@ -2484,6 +2487,12 @@ class GlowFloorplanCardEditor extends HTMLElement {
       fl.splice(this._floorIdx + 1, 0, normalizeFloor({ name: `Etage ${n}` }));
       this._emit();
       this._switchFloor(this._floorIdx + 1);
+      return;
+    }
+    if (act === "default-floor") {
+      this._config.default_floor = this._full.floors[this._floorIdx].name;
+      this._emit();
+      this._render();
       return;
     }
     if (act === "del-floor") {
