@@ -10,7 +10,7 @@
  * License: MIT
  */
 
-const VERSION = "1.4.2";
+const VERSION = "1.4.3";
 const CARD_TAG = "glow-floorplan-card";
 const EDITOR_TAG = "glow-floorplan-card-editor";
 
@@ -464,23 +464,25 @@ const STYLES = `
   .glow { transition: opacity .6s ease; }
   .warn { padding: 12px 16px; color: var(--error-color, #db4437); }
   .outer { position: relative; }
+  /* Floor tabs and the 2D/3D switch sit in their own row above the plan, never over it. */
+  .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 10px 4px; }
   .viewbtn {
-    position: absolute; top: 10px; right: 10px; z-index: 2; display: inline-flex; gap: 2px; padding: 3px;
-    border: 1px solid rgba(255,255,255,0.35); border-radius: 999px; cursor: pointer; font: 600 12px/1 Helvetica, Arial, sans-serif;
-    background: rgba(30,36,52,0.35); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    margin-left: auto; display: inline-flex; gap: 2px; padding: 3px;
+    border: 1px solid var(--divider-color, rgba(127,127,127,0.35)); border-radius: 999px; cursor: pointer;
+    font: 600 12px/1 Helvetica, Arial, sans-serif; background: var(--secondary-background-color, rgba(127,127,127,0.12));
   }
-  .viewbtn span { padding: 5px 9px; border-radius: 999px; color: rgba(255,255,255,0.85); }
-  .viewbtn span.on { background: rgba(255,255,255,0.9); color: #2e3442; }
+  .viewbtn span { padding: 5px 9px; border-radius: 999px; color: var(--primary-text-color, #2e3442); }
+  .viewbtn span.on { background: var(--primary-text-color, #2e3442); color: var(--card-background-color, var(--ha-card-background, #fff)); }
   .floorbar {
-    position: absolute; top: 10px; left: 10px; z-index: 2; display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 3px; max-width: 70%;
-    border: 1px solid rgba(255,255,255,0.35); border-radius: 18px;
-    background: rgba(30,36,52,0.35); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 3px; min-width: 0;
+    border: 1px solid var(--divider-color, rgba(127,127,127,0.35)); border-radius: 18px;
+    background: var(--secondary-background-color, rgba(127,127,127,0.12));
   }
   .floorbar button {
-    position: relative; border: 0; background: transparent; color: rgba(255,255,255,0.85); cursor: pointer;
+    position: relative; border: 0; background: transparent; color: var(--primary-text-color, #2e3442); cursor: pointer;
     font: 600 12px/1 Helvetica, Arial, sans-serif; padding: 6px 10px; border-radius: 999px;
   }
-  .floorbar button.on { background: rgba(255,255,255,0.9); color: #2e3442; }
+  .floorbar button.on { background: var(--primary-text-color, #2e3442); color: var(--card-background-color, var(--ha-card-background, #fff)); }
   .floorbar .dot { position: absolute; top: 3px; right: 3px; width: 7px; height: 7px; border-radius: 50%; }
   .floorbar .dot.lit { background: #ffc107; box-shadow: 0 0 6px #ffc107; }
   .floorbar .dot.motion { background: #7fd3ff; box-shadow: 0 0 6px #7fd3ff; animation: gfp-pulse 1.6s ease-in-out infinite; }
@@ -1432,7 +1434,7 @@ class GlowFloorplanCard extends HTMLElement {
     this.shadowRoot.innerHTML = `<style>${STYLES}</style>
       <ha-card>${title}${err}
         <div class="outer">
-          ${floors}${toggle}
+          ${floors || toggle ? `<div class="toolbar">${floors}${toggle}</div>` : ""}
           <div class="wrap" style="aspect-ratio:${fr.ratio}">
             ${r.svg()}
             <div class="layer">${r.devicesHtml()}</div>
