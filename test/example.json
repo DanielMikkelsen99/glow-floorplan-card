@@ -1,0 +1,382 @@
+{
+ "type": "custom:glow-floorplan-card",
+ "size": [
+  850,
+  1250
+ ],
+ "rooms": [
+  {
+   "name": "Sunroom",
+   "points": [
+    [
+     618,
+     505
+    ],
+    [
+     772,
+     505
+    ],
+    [
+     772,
+     738
+    ],
+    [
+     618,
+     738
+    ]
+   ],
+   "label": [
+    695,
+    655
+   ]
+  },
+  {
+   "name": "Bedroom",
+   "points": [
+    [
+     290,
+     110
+    ],
+    [
+     583,
+     110
+    ],
+    [
+     583,
+     325
+    ],
+    [
+     290,
+     325
+    ]
+   ],
+   "label": [
+    440,
+    135
+   ],
+   "entity": "light.bedroom_ceiling"
+  },
+  {
+   "name": "Kids",
+   "points": [
+    [
+     155,
+     72
+    ],
+    [
+     275,
+     72
+    ],
+    [
+     275,
+     240
+    ],
+    [
+     155,
+     240
+    ]
+   ],
+   "label": [
+    212,
+    166
+   ],
+   "entity": "light.kids_room",
+   "motion": [
+    "binary_sensor.kids_motion"
+   ]
+  },
+  {
+   "name": "Dining",
+   "points": [
+    [
+     275,
+     348
+    ],
+    [
+     597,
+     348
+    ],
+    [
+     597,
+     525
+    ],
+    [
+     260,
+     525
+    ],
+    [
+     260,
+     610
+    ],
+    [
+     110,
+     610
+    ],
+    [
+     110,
+     265
+    ],
+    [
+     275,
+     265
+    ]
+   ],
+   "label": [
+    210,
+    330
+   ],
+   "entity": "light.dining_room",
+   "motion": [
+    "binary_sensor.dining_motion"
+   ]
+  },
+  {
+   "name": "Living",
+   "points": [
+    [
+     260,
+     525
+    ],
+    [
+     597,
+     525
+    ],
+    [
+     597,
+     910
+    ],
+    [
+     260,
+     910
+    ]
+   ],
+   "label": [
+    430,
+    880
+   ],
+   "entity": "light.living_room",
+   "motion": [
+    "binary_sensor.living_room_motion"
+   ]
+  },
+  {
+   "name": "Kitchen",
+   "points": [
+    [
+     255,
+     938
+    ],
+    [
+     560,
+     938
+    ],
+    [
+     560,
+     1150
+    ],
+    [
+     255,
+     1150
+    ]
+   ],
+   "label": [
+    405,
+    1090
+   ],
+   "entity": "light.kitchen",
+   "motion": [
+    "binary_sensor.kitchen_motion"
+   ]
+  },
+  {
+   "name": "Hall",
+   "points": [
+    [
+     100,
+     625
+    ],
+    [
+     245,
+     625
+    ],
+    [
+     245,
+     985
+    ],
+    [
+     100,
+     985
+    ]
+   ],
+   "label": [
+    170,
+    880
+   ],
+   "motion": [
+    "binary_sensor.hallway_motion"
+   ]
+  },
+  {
+   "name": "WC",
+   "points": [
+    [
+     100,
+     1015
+    ],
+    [
+     225,
+     1015
+    ],
+    [
+     225,
+     1182
+    ],
+    [
+     100,
+     1182
+    ]
+   ],
+   "label": [
+    160,
+    1110
+   ]
+  }
+ ],
+ "openings": [
+  {
+   "line": [
+    272,
+    525,
+    584,
+    525
+   ]
+  },
+  {
+   "line": [
+    260,
+    513,
+    260,
+    610
+   ],
+   "dashed": false
+  }
+ ],
+ "devices": [
+  {
+   "entity": "light.bedroom_ceiling",
+   "x": 440,
+   "y": 215,
+   "icon": "mdi:ceiling-light"
+  },
+  {
+   "entity": "light.dining_table_1",
+   "x": 530,
+   "y": 480,
+   "icon": "mdi:ceiling-light"
+  },
+  {
+   "entity": "light.dining_table_2",
+   "x": 415,
+   "y": 480,
+   "icon": "mdi:ceiling-light"
+  },
+  {
+   "entity": "light.dining_window",
+   "x": 205,
+   "y": 450,
+   "icon": "mdi:lamp"
+  },
+  {
+   "entity": "light.living_table",
+   "x": 440,
+   "y": 755,
+   "icon": "mdi:ceiling-light"
+  },
+  {
+   "entity": "light.corner_1",
+   "x": 335,
+   "y": 665,
+   "icon": "mdi:floor-lamp"
+  },
+  {
+   "entity": "light.corner_2",
+   "x": 330,
+   "y": 860,
+   "icon": "mdi:floor-lamp"
+  },
+  {
+   "entity": "light.garden_door",
+   "x": 540,
+   "y": 870,
+   "icon": "mdi:lamp"
+  },
+  {
+   "entity": "light.kids_ceiling",
+   "x": 245,
+   "y": 205,
+   "icon": "mdi:ceiling-light"
+  },
+  {
+   "entity": "switch.kids_lamp",
+   "x": 242,
+   "y": 105,
+   "icon": "mdi:airplane",
+   "glow": true
+  },
+  {
+   "entity": "light.front_door",
+   "x": 50,
+   "y": 800,
+   "icon": "mdi:outdoor-lamp"
+  },
+  {
+   "entity": "vacuum.robot",
+   "x": 215,
+   "y": 660,
+   "icon": "mdi:robot-vacuum",
+   "tap_action": {
+    "action": "navigate",
+    "navigation_path": "/dashboard-home/vacuum"
+   }
+  },
+  {
+   "entity": "sensor.living_room_temperature",
+   "x": 480,
+   "y": 585,
+   "type": "label"
+  },
+  {
+   "entity": "sensor.hallway_temperature",
+   "x": 170,
+   "y": 765,
+   "type": "label"
+  },
+  {
+   "entity": "light.kitchen",
+   "x": 405,
+   "y": 1010,
+   "icon": "mdi:ceiling-light"
+  },
+  {
+   "entity": "lawn_mower.mower",
+   "x": 735,
+   "y": 195,
+   "icon": "mdi:robot-mower",
+   "tap_action": {
+    "action": "more-info"
+   }
+  },
+  {
+   "entity": "switch.christmas_lights",
+   "x": 60,
+   "y": 156,
+   "icon": "mdi:string-lights",
+   "glow": true,
+   "glow_color": [
+    255,
+    170,
+    80
+   ]
+  }
+ ]
+}

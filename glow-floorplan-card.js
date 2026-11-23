@@ -1,0 +1,1023 @@
+/*
+ * Glow Floorplan Card for Home Assistant
+ * https://github.com/DanielMikkelsen99/glow-floorplan-card
+ *
+ * A dependency-free Lovelace card that draws a floor plan, lets every room
+ * glow in the actual colour and brightness of its lamps, pulses rooms on
+ * motion, switches between day and night, and ships with a drag-and-drop
+ * visual editor.
+ *
+ * License: MIT
+ */
+
+const VERSION = "1.0.0";
+const CARD_TAG = "glow-floorplan-card";
+const EDITOR_TAG = "glow-floorplan-card-editor";
+
+/* ------------------------------------------------------------------ */
+/* Helpers                                                              */
+/* ------------------------------------------------------------------ */
+
+const DEFAULT_ICONS = {
+  light: "mdi:lightbulb",
+  switch: "mdi:power-socket-eu",
+  fan: "mdi:fan",
+  vacuum: "mdi:robot-vacuum",
+  lawn_mower: "mdi:robot-mower",
+  lock: "mdi:lock",
+  cover: "mdi:window-shutter",
+  climate: "mdi:thermostat",
+  media_player: "mdi:speaker",
+  binary_sensor: "mdi:checkbox-blank-circle-outline",
+  sensor: "mdi:eye",
+  camera: "mdi:cctv",
+  scene: "mdi:palette",
+  script: "mdi:script-text",
+  input_boolean: "mdi:toggle-switch",
+};
+
+const ACTIVE_STATES = ["on", "open", "unlocked", "playing", "cleaning", "mowing", "returning", "heating", "cooling"];
+const BUSY_STATES = ["cleaning", "returning", "mowing"];
+const ERROR_STATES = ["error"];
+
+const PALETTE = {
+  day: {
+    bg: "transparent",
+    floorA: "#eef1f7",
+    floorB: "#dfe4ee",
+    wall: "#ffffff",
+    opening: "#e7ebf3",
+    dash: "#c9d0de",
+    text: "#5b6478",
+    shadow: 0.5,
+  },
+  night: {
+    bg: "transparent",
+    floorA: "#3b4254",
+    floorB: "#2e3442",
+    wall: "#646d82",
+    opening: "#353b4b",
+    dash: "#555d70",
+    text: "#aab3c7",
+    shadow: 0.6,
+  },
+};
+
+const domainOf = (entityId) => (entityId || "").split(".")[0];
+
+const esc = (s) =>
+  String(s ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+
+const clone = (o) => JSON.parse(JSON.stringify(o));
+
+const slug = (s) =>
+  String(s || "rum")
+    .toLowerCase()
+    .replace(/æ/g, "ae")
+    .replace(/ø/g, "oe")
+    .replace(/å/g, "aa")
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_|_$/g, "") || "rum";
+
+function fireEvent(node, type, detail) {
+  node.dispatchEvent(new CustomEvent(type, { detail, bubbles: true, composed: true }));
+}
+
+/** Kelvin to approximate RGB (Tanner Helland). */
+function kelvinToRgb(k) {
+  const t = Math.max(1000, Math.min(40000, k)) / 100;
+  let r, g, b;
+  if (t <= 66) {
+    r = 255;
+    g = 99.4708025861 * Math.log(t) - 161.1195681661;
+    b = t <= 19 ? 0 : 138.5177312231 * Math.log(t - 10) - 305.0447927307;
+  } else {
+    r = 329.698727446 * Math.pow(t - 60, -0.1332047592);
+    g = 288.1221695283 * Math.pow(t - 60, -0.0755148492);
+    b = 255;
+  }
+  const c = (v) => Math.round(Math.max(0, Math.min(255, v)));
+  return [c(r), c(g), c(b)];
+}
+
+/** Colour of a lit entity: real bulb colour when available, warm white otherwise. */
+function lightColor(stateObj, fallback) {
+  const a = (stateObj && stateObj.attributes) || {};
+  if (Array.isArray(a.rgb_color)) return a.rgb_color;
+  if (a.color_temp_kelvin) return kelvinToRgb(a.color_temp_kelvin);
+  if (Array.isArray(a.hs_color)) return hsToRgb(a.hs_color[0], a.hs_color[1]);
+  return fallback || [255, 196, 120];
+}
+
+function hsToRgb(h, s) {
+  s /= 100;
+  const f = (n) => {
+    const k = (n + h / 60) % 6;
+    return 255 * (1 - s * Math.max(0, Math.min(k, 4 - k, 1)));
+  };
+  return [Math.round(f(5)), Math.round(f(3)), Math.round(f(1))];
+}
+
+function brightnessOf(stateObj) {
+  const b = stateObj && stateObj.attributes && stateObj.attributes.brightness;
+  return typeof b === "number" ? Math.max(0.08, b / 255) : 1;
+}
+
+function isOn(stateObj) {
+  return !!stateObj && ACTIVE_STATES.includes(stateObj.state);
+}
+
+function pointInPolygon(x, y, pts) {
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const [xi, yi] = pts[i];
+    const [xj, yj] = pts[j];
+    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+function bbox(pts) {
+  const xs = pts.map((p) => p[0]);
+  const ys = pts.map((p) => p[1]);
+  const minX = Math.min(...xs);
+  const minY = Math.min(...ys);
+  const maxX = Math.max(...xs);
+  const maxY = Math.max(...ys);
+  return { minX, minY, maxX, maxY, w: maxX - minX, h: maxY - minY, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 };
+}
+
+function normalizeConfig(config) {
+  const c = clone(config || {});
+  c.size = Array.isArray(c.size) && c.size.length === 2 ? c.size.map(Number) : [850, 1250];
+  c.rooms = Array.isArray(c.rooms) ? c.rooms : [];
+  c.devices = Array.isArray(c.devices) ? c.devices : [];
+  c.openings = Array.isArray(c.openings) ? c.openings : [];
+  c.rooms.forEach((r, i) => {
+    r.id = r.id || slug(r.name || `rum_${i + 1}`);
+    r.points = Array.isArray(r.points) ? r.points.map((p) => [Number(p[0]), Number(p[1])]) : [];
+    r.motion = r.motion ? [].concat(r.motion) : [];
+  });
+  return c;
+}
+
+/* ------------------------------------------------------------------ */
+/* Shared renderer (used by the card and by the editor preview)         */
+/* ------------------------------------------------------------------ */
+
+const STYLES = `
+  :host { display: block; }
+  ha-card { overflow: hidden; background: var(--gfp-card-bg, var(--ha-card-background, var(--card-background-color))); }
+  .wrap { position: relative; width: 100%; user-select: none; -webkit-user-select: none; touch-action: manipulation; }
+  .wrap svg.plan { display: block; width: 100%; height: auto; }
+  .layer { position: absolute; inset: 0; pointer-events: none; }
+  .dev {
+    position: absolute; transform: translate(-50%, -50%);
+    pointer-events: auto; cursor: pointer; line-height: 0;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .dev ha-icon {
+    --mdc-icon-size: var(--gfp-icon-size, 26px);
+    filter: drop-shadow(0 1px 3px rgba(0,0,0,0.75));
+    transition: color .4s ease, opacity .4s ease;
+  }
+  .dev.chip {
+    line-height: normal; font-size: 12px; font-weight: 600; color: #fff;
+    background: rgba(30,36,52,0.35); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(255,255,255,0.3); border-radius: 10px; padding: 2px 8px;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.5); white-space: nowrap;
+  }
+  .dev.unavailable ha-icon { opacity: .35; }
+  .room-hit { cursor: pointer; }
+  .pulse { animation: gfp-pulse 2s ease-in-out infinite; }
+  .ring { animation: gfp-ring 1.8s ease-out infinite; transform-box: fill-box; transform-origin: center; }
+  @keyframes gfp-pulse { 0%,100% { opacity: 0; } 50% { opacity: 1; } }
+  @keyframes gfp-ring { 0% { opacity: .9; transform: scale(.35); } 100% { opacity: 0; transform: scale(1); } }
+  .glow { transition: opacity .6s ease; }
+  .warn { padding: 12px 16px; color: var(--error-color, #db4437); }
+  @media (prefers-reduced-motion: reduce) { .pulse, .ring { animation: none; opacity: .6; } }
+`;
+
+class Renderer {
+  constructor(config, hass, opts = {}) {
+    this.c = config;
+    this.hass = hass;
+    this.edit = !!opts.edit;
+    this.uid = opts.uid || Math.random().toString(36).slice(2, 8);
+  }
+
+  mode() {
+    const t = this.c.theme || "auto";
+    if (t === "day" || t === "night") return t;
+    const sun = this.hass && this.hass.states["sun.sun"];
+    return sun && sun.state === "below_horizon" ? "night" : "day";
+  }
+
+  st(id) {
+    return (this.hass && this.hass.states[id]) || undefined;
+  }
+
+  roomOf(x, y) {
+    return this.c.rooms.find((r) => r.points.length > 2 && pointInPolygon(x, y, r.points));
+  }
+
+  /** Every light source that should glow: placed lights (and devices with glow: true). */
+  glowSources() {
+    const out = [];
+    for (const d of this.c.devices) {
+      const dom = domainOf(d.entity);
+      const wants = d.glow === undefined ? dom === "light" : !!d.glow;
+      if (!wants || d.type === "label") continue;
+      const s = this.st(d.entity);
+      if (!isOn(s)) continue;
+      out.push({ x: d.x, y: d.y, rgb: lightColor(s, d.glow_color), level: brightnessOf(s), room: this.roomOf(d.x, d.y) });
+    }
+    // Room-level lights without a placed icon glow from the room centre.
+    for (const r of this.c.rooms) {
+      for (const id of [].concat(r.lights || [])) {
+        const s = this.st(id);
+        if (!isOn(s)) continue;
+        const b = bbox(r.points);
+        out.push({ x: b.cx, y: b.cy, rgb: lightColor(s), level: brightnessOf(s), room: r });
+      }
+    }
+    return out;
+  }
+
+  svg() {
+    const c = this.c;
+    const [W, H] = c.size;
+    const p = PALETTE[this.mode()];
+    const u = this.uid;
+    const glowStrength = c.glow_strength === undefined ? 1 : Number(c.glow_strength);
+
+    const defs = [];
+    const floor = [];
+    const glow = [];
+    const pulses = [];
+    const labels = [];
+    const hits = [];
+
+    defs.push(`
+      <linearGradient id="f-${u}" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="${p.floorA}"/><stop offset="1" stop-color="${p.floorB}"/>
+      </linearGradient>
+      <filter id="sh-${u}" x="-10%" y="-10%" width="130%" height="130%">
+        <feDropShadow dx="8" dy="10" stdDeviation="6" flood-color="#000" flood-opacity="${p.shadow}"/>
+      </filter>`);
+
+    c.rooms.forEach((r, i) => {
+      if (r.points.length < 3) return;
+      const pts = r.points.map((q) => q.join(",")).join(" ");
+      defs.push(`<clipPath id="cp-${u}-${i}"><polygon points="${pts}"/></clipPath>`);
+      floor.push(`<polygon points="${pts}" fill="url(#f-${u})" stroke="${p.wall}" stroke-width="${c.wall_width || 24}" stroke-linejoin="miter"/>`);
+    });
+
+    // Openings: erase the wall between two rooms (e.g. an open kitchen).
+    const openings = c.openings
+      .map((o) => {
+        const [x1, y1, x2, y2] = o.line || o;
+        const w = o.width || (c.wall_width || 24) + 2;
+        return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${p.opening}" stroke-width="${w}"/>` +
+          (o.dashed === false ? "" : `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${p.dash}" stroke-width="2" stroke-dasharray="8 8"/>`);
+      })
+      .join("");
+
+    // Glow: one radial gradient per light source, clipped to its room.
+    this.glowSources().forEach((g, gi) => {
+      const [r, gg, b] = g.rgb;
+      const col = `rgb(${r},${gg},${b})`;
+      const a = Math.min(0.95, 0.25 + 0.7 * g.level) * glowStrength;
+      if (g.room) {
+        const ri = c.rooms.indexOf(g.room);
+        const bb = bbox(g.room.points);
+        const rad = Math.max(bb.w, bb.h) * 0.85;
+        defs.push(`<radialGradient id="g-${u}-${gi}" gradientUnits="userSpaceOnUse" cx="${g.x}" cy="${g.y}" r="${rad}">
+          <stop offset="0" stop-color="${col}" stop-opacity="${a.toFixed(3)}"/>
+          <stop offset="0.55" stop-color="${col}" stop-opacity="${(a * 0.45).toFixed(3)}"/>
+          <stop offset="1" stop-color="${col}" stop-opacity="${(a * 0.12).toFixed(3)}"/></radialGradient>`);
+        glow.push(`<rect class="glow" clip-path="url(#cp-${u}-${ri})" x="${bb.minX - 20}" y="${bb.minY - 20}" width="${bb.w + 40}" height="${bb.h + 40}" fill="url(#g-${u}-${gi})" style="mix-blend-mode:${this.mode() === "night" ? "screen" : "normal"}"/>`);
+      } else {
+        const rad = c.outdoor_glow_radius || 70;
+        defs.push(`<radialGradient id="g-${u}-${gi}" gradientUnits="userSpaceOnUse" cx="${g.x}" cy="${g.y}" r="${rad}">
+          <stop offset="0" stop-color="${col}" stop-opacity="${(a * 0.9).toFixed(3)}"/>
+          <stop offset="1" stop-color="${col}" stop-opacity="0"/></radialGradient>`);
+        glow.push(`<circle class="glow" cx="${g.x}" cy="${g.y}" r="${rad}" fill="url(#g-${u}-${gi})"/>`);
+      }
+    });
+
+    // Motion: the whole room pulses while any of its motion sensors is on.
+    c.rooms.forEach((r, i) => {
+      if (r.points.length < 3) return;
+      const moving = r.motion.some((id) => isOn(this.st(id)));
+      if (moving || (this.edit && this.c.preview_motion)) {
+        const pts = r.points.map((q) => q.join(",")).join(" ");
+        const col = c.motion_color || "#7fd3ff";
+        pulses.push(`<g class="pulse"><polygon points="${pts}" fill="${col}" fill-opacity="0.32" stroke="${col}" stroke-width="6" stroke-opacity="0.9" clip-path="url(#cp-${u}-${i})"/></g>`);
+      }
+      if (r.name && r.show_name !== false) {
+        const bb = bbox(r.points);
+        const [lx, ly] = r.label || [bb.cx, bb.cy];
+        labels.push(`<text x="${lx}" y="${ly}" font-family="Helvetica,Arial,sans-serif" font-size="${c.label_size || 28}" font-weight="600" fill="${p.text}" text-anchor="middle" dominant-baseline="middle">${esc(r.name)}</text>`);
+      }
+      if (!this.edit && r.entity) {
+        const pts = r.points.map((q) => q.join(",")).join(" ");
+        hits.push(`<polygon class="room-hit" data-room="${i}" points="${pts}" fill="transparent"/>`);
+      }
+    });
+
+    // Robots: ring when busy, red ring on error.
+    for (const d of c.devices) {
+      const s = this.st(d.entity);
+      if (!s) continue;
+      const dom = domainOf(d.entity);
+      if (!["vacuum", "lawn_mower"].includes(dom) && !d.ring_states) continue;
+      const busy = (d.ring_states || BUSY_STATES).includes(s.state);
+      const err = ERROR_STATES.includes(s.state);
+      if (!busy && !err) continue;
+      const col = err ? "#ff5252" : c.ring_color || "#4fc3f7";
+      pulses.push(`<circle class="ring" cx="${d.x}" cy="${d.y}" r="50" fill="none" stroke="${col}" stroke-width="5"/>`);
+    }
+
+    return `<svg class="plan" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet">
+      <defs>${defs.join("")}</defs>
+      <g filter="url(#sh-${u})">${floor.join("")}</g>
+      ${openings}
+      <g>${glow.join("")}</g>
+      <g>${pulses.join("")}</g>
+      <g pointer-events="none">${labels.join("")}</g>
+      <g>${hits.join("")}</g>
+    </svg>`;
+  }
+
+  iconColor(d, s) {
+    if (!s || s.state === "unavailable") return "var(--disabled-text-color, #9aa3b5)";
+    if (d.color) return d.color;
+    const dom = domainOf(d.entity);
+    if (ERROR_STATES.includes(s.state)) return "var(--error-color, #ff5252)";
+    if (!isOn(s)) return this.mode() === "night" ? "#c3cad8" : "var(--state-icon-color, #44739e)";
+    if (dom === "light") {
+      const [r, g, b] = lightColor(s);
+      return `rgb(${r},${g},${b})`;
+    }
+    if (BUSY_STATES.includes(s.state)) return "#4fc3f7";
+    return "var(--state-active-color, #ffc107)";
+  }
+
+  devicesHtml() {
+    const [W, H] = this.c.size;
+    return this.c.devices
+      .map((d, i) => {
+        const s = this.st(d.entity);
+        const left = ((d.x / W) * 100).toFixed(3);
+        const top = ((d.y / H) * 100).toFixed(3);
+        const una = !s || s.state === "unavailable" ? " unavailable" : "";
+        if (d.type === "label") {
+          let txt = "–";
+          if (s) {
+            const unit = s.attributes.unit_of_measurement || "";
+            txt = d.attribute ? s.attributes[d.attribute] : s.state;
+            if (!isNaN(parseFloat(txt)) && d.decimals !== undefined) txt = Number(txt).toFixed(d.decimals);
+            txt = `${d.prefix || ""}${txt}${d.attribute ? "" : unit ? " " + unit : ""}${d.suffix || ""}`;
+          }
+          return `<div class="dev chip${una}" data-dev="${i}" style="left:${left}%;top:${top}%" title="${esc(d.name || (s && s.attributes.friendly_name) || d.entity)}">${esc(txt)}</div>`;
+        }
+        const icon = d.icon || (s && s.attributes.icon) || DEFAULT_ICONS[domainOf(d.entity)] || "mdi:help-circle-outline";
+        const size = d.size ? `--gfp-icon-size:${d.size}px;` : "";
+        return `<div class="dev${una}" data-dev="${i}" style="left:${left}%;top:${top}%;${size}" title="${esc(d.name || (s && s.attributes.friendly_name) || d.entity)}"><ha-icon icon="${esc(icon)}" style="color:${this.iconColor(d, s)}"></ha-icon></div>`;
+      })
+      .join("");
+  }
+
+  /** A compact signature of the states the card depends on, to skip needless re-renders. */
+  signature() {
+    const ids = new Set(["sun.sun"]);
+    this.c.devices.forEach((d) => ids.add(d.entity));
+    this.c.rooms.forEach((r) => {
+      r.motion.forEach((m) => ids.add(m));
+      [].concat(r.lights || []).forEach((l) => ids.add(l));
+      if (r.entity) ids.add(r.entity);
+    });
+    let sig = "";
+    for (const id of ids) {
+      const s = this.st(id);
+      if (!s) {
+        sig += `${id}:-|`;
+        continue;
+      }
+      const a = s.attributes || {};
+      sig += `${id}:${s.state}:${a.brightness}:${a.rgb_color}:${a.color_temp_kelvin}:${a.unit_of_measurement}|`;
+    }
+    return sig;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Action handling                                                      */
+/* ------------------------------------------------------------------ */
+
+function defaultTap(entity) {
+  const dom = domainOf(entity);
+  if (["light", "switch", "fan", "input_boolean", "lock", "cover"].includes(dom)) return { action: "toggle" };
+  if (["scene", "script"].includes(dom)) return { action: "perform-action", perform_action: `${dom}.turn_on`, target: { entity_id: entity } };
+  return { action: "more-info" };
+}
+
+function bindPress(el, onTap, onHold, onDouble) {
+  let timer = null;
+  let held = false;
+  let lastTap = 0;
+  let single = null;
+  let startX = 0;
+  let startY = 0;
+  el.addEventListener("pointerdown", (ev) => {
+    held = false;
+    startX = ev.clientX;
+    startY = ev.clientY;
+    timer = setTimeout(() => {
+      held = true;
+      onHold && onHold();
+    }, 500);
+  });
+  const cancel = () => clearTimeout(timer);
+  el.addEventListener("pointermove", (ev) => {
+    if (Math.abs(ev.clientX - startX) > 8 || Math.abs(ev.clientY - startY) > 8) cancel();
+  });
+  el.addEventListener("pointerleave", cancel);
+  el.addEventListener("pointercancel", cancel);
+  el.addEventListener("pointerup", () => {
+    cancel();
+    if (held) return;
+    const now = Date.now();
+    if (onDouble && now - lastTap < 250) {
+      clearTimeout(single);
+      lastTap = 0;
+      onDouble();
+      return;
+    }
+    lastTap = now;
+    if (onDouble) single = setTimeout(onTap, 250);
+    else onTap();
+  });
+  el.addEventListener("contextmenu", (ev) => ev.preventDefault());
+}
+
+/* ------------------------------------------------------------------ */
+/* The card                                                             */
+/* ------------------------------------------------------------------ */
+
+class GlowFloorplanCard extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" });
+    this._sig = "";
+    this._uid = Math.random().toString(36).slice(2, 8);
+  }
+
+  static getConfigElement() {
+    return document.createElement(EDITOR_TAG);
+  }
+
+  static getStubConfig() {
+    return {
+      size: [600, 400],
+      rooms: [
+        { name: "Stue", points: [[40, 40], [340, 40], [340, 360], [40, 360]], motion: [] },
+        { name: "Køkken", points: [[360, 40], [560, 40], [560, 220], [360, 220]], motion: [] },
+      ],
+      devices: [],
+      openings: [],
+    };
+  }
+
+  setConfig(config) {
+    if (!config) throw new Error("Ugyldig konfiguration");
+    this._raw = config;
+    this._layout = null;
+    if (config.layout_from) {
+      this._config = normalizeConfig({ ...config, rooms: [], devices: [] });
+      this._loadShared();
+    } else {
+      this._config = normalizeConfig(config);
+    }
+    this._sig = "";
+    this._render(true);
+  }
+
+  async _loadShared() {
+    if (!this._hass) return;
+    const src = this._raw.layout_from;
+    const urlPath = typeof src === "string" ? src : src.dashboard;
+    try {
+      const lv = await this._hass.callWS({ type: "lovelace/config", url_path: urlPath === "default" ? null : urlPath });
+      const found = findCard(lv, (c) => c.type === `custom:${CARD_TAG}` && !c.layout_from);
+      if (!found) throw new Error(`Fandt ingen ${CARD_TAG} i ${urlPath}`);
+      const { layout_from, type, ...local } = this._raw;
+      this._config = normalizeConfig({ ...found, ...local });
+      this._layoutError = null;
+    } catch (e) {
+      this._layoutError = e.message || String(e);
+    }
+    this._loading = false;
+    this._sig = "";
+    this._render(true);
+  }
+
+  set hass(hass) {
+    const first = !this._hass;
+    this._hass = hass;
+    if (first && this._raw && this._raw.layout_from && !this._loading) {
+      this._loading = true;
+      this._loadShared();
+    }
+    this._render(false);
+  }
+
+  getCardSize() {
+    const [W, H] = (this._config && this._config.size) || [850, 1250];
+    return Math.max(3, Math.round((H / W) * 8));
+  }
+
+  getGridOptions() {
+    return { columns: "full", min_columns: 6 };
+  }
+
+  _render(force) {
+    if (!this._config || !this._hass) return;
+    const r = new Renderer(this._config, this._hass, { uid: this._uid });
+    const sig = r.signature();
+    if (!force && sig === this._sig) return;
+    this._sig = sig;
+    const [W, H] = this._config.size;
+    const err = this._layoutError ? `<div class="warn">${esc(this._layoutError)}</div>` : "";
+    const title = this._config.title ? `<h1 class="card-header">${esc(this._config.title)}</h1>` : "";
+    this.shadowRoot.innerHTML = `<style>${STYLES}</style>
+      <ha-card>${title}${err}
+        <div class="wrap" style="aspect-ratio:${W}/${H}">
+          ${r.svg()}
+          <div class="layer">${r.devicesHtml()}</div>
+        </div>
+      </ha-card>`;
+    this._bind();
+  }
+
+  _bind() {
+    const root = this.shadowRoot;
+    root.querySelectorAll(".dev").forEach((el) => {
+      const d = this._config.devices[Number(el.dataset.dev)];
+      if (!d) return;
+      const cfg = {
+        entity: d.entity,
+        tap_action: d.tap_action || (d.type === "label" ? { action: "more-info" } : defaultTap(d.entity)),
+        hold_action: d.hold_action || { action: "more-info" },
+        double_tap_action: d.double_tap_action,
+      };
+      bindPress(
+        el,
+        () => this._act(cfg, "tap"),
+        () => this._act(cfg, "hold"),
+        d.double_tap_action ? () => this._act(cfg, "double_tap") : null
+      );
+    });
+    root.querySelectorAll(".room-hit").forEach((el) => {
+      const room = this._config.rooms[Number(el.dataset.room)];
+      if (!room) return;
+      const cfg = {
+        entity: room.entity,
+        tap_action: room.tap_action || defaultTap(room.entity),
+        hold_action: room.hold_action || { action: "more-info" },
+      };
+      bindPress(el, () => this._act(cfg, "tap"), () => this._act(cfg, "hold"));
+    });
+  }
+
+  _act(cfg, action) {
+    const a = cfg[`${action}_action`];
+    if (!a || a.action === "none") return;
+    // Toggle locally for snappy feedback is left to HA; use the standard action pipeline.
+    fireEvent(this, "hass-action", { config: cfg, action });
+  }
+}
+
+function findCard(node, pred) {
+  if (!node || typeof node !== "object") return null;
+  if (Array.isArray(node)) {
+    for (const n of node) {
+      const f = findCard(n, pred);
+      if (f) return f;
+    }
+    return null;
+  }
+  if (node.type && pred(node)) return node;
+  for (const k of ["views", "sections", "cards", "card", "elements"]) {
+    if (node[k]) {
+      const f = findCard(node[k], pred);
+      if (f) return f;
+    }
+  }
+  return null;
+}
+
+/* ------------------------------------------------------------------ */
+/* Visual editor with drag and drop                                     */
+/* ------------------------------------------------------------------ */
+
+const EDITOR_STYLES = `
+  ${STYLES}
+  .ed { display: flex; flex-direction: column; gap: 12px; }
+  .bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .bar button, .panel button {
+    font: inherit; font-size: 13px; border: 1px solid var(--divider-color, #ccc); background: var(--card-background-color, #fff);
+    color: var(--primary-text-color); border-radius: 8px; padding: 6px 10px; cursor: pointer;
+  }
+  .bar button.on { background: var(--primary-color); color: var(--text-primary-color, #fff); border-color: var(--primary-color); }
+  .bar button.danger, .panel button.danger { color: var(--error-color, #db4437); }
+  .hint { font-size: 12px; color: var(--secondary-text-color); }
+  .stage { position: relative; border-radius: 12px; overflow: hidden; border: 1px dashed var(--divider-color, #ccc); }
+  .stage .dev { cursor: grab; outline: none; }
+  .stage .dev.sel { outline: 2px solid var(--primary-color); outline-offset: 3px; border-radius: 50%; }
+  .stage .dev.chip.sel { border-radius: 10px; }
+  .handle { fill: #fff; stroke: var(--primary-color, #03a9f4); stroke-width: 3; cursor: grab; }
+  .handle.label { fill: var(--primary-color, #03a9f4); }
+  .room-outline { fill: none; stroke: var(--primary-color, #03a9f4); stroke-width: 3; stroke-dasharray: 10 6; }
+  .room-pick { fill: transparent; cursor: pointer; }
+  .panel { display: grid; grid-template-columns: 110px 1fr; gap: 8px 10px; align-items: center;
+    padding: 12px; border-radius: 12px; background: var(--secondary-background-color, #f5f5f5); }
+  .panel h3 { grid-column: 1 / -1; margin: 0; font-size: 15px; }
+  .panel label { font-size: 13px; color: var(--secondary-text-color); }
+  .panel input, .panel select, .panel textarea {
+    font: inherit; font-size: 13px; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--divider-color, #ccc);
+    background: var(--card-background-color, #fff); color: var(--primary-text-color); width: 100%; box-sizing: border-box;
+  }
+  .panel .row { grid-column: 1 / -1; display: flex; gap: 6px; flex-wrap: wrap; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+`;
+
+class GlowFloorplanCardEditor extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" });
+    this._mode = "devices"; // devices | rooms
+    this._sel = null; // {kind:'dev', i} | {kind:'room', i}
+    this._uid = Math.random().toString(36).slice(2, 8);
+  }
+
+  setConfig(config) {
+    this._config = normalizeConfig(config);
+    this._raw = config;
+    if (!this._dragging) this._render();
+  }
+
+  set hass(hass) {
+    const first = !this._hass;
+    this._hass = hass;
+    if (first) this._render();
+  }
+
+  _emit() {
+    const out = clone(this._config);
+    // Keep YAML tidy: drop empty arrays and generated ids that equal the slug of the name.
+    out.rooms.forEach((r) => {
+      if (!r.motion.length) delete r.motion;
+      if (r.id === slug(r.name)) delete r.id;
+    });
+    if (!out.openings.length) delete out.openings;
+    out.type = this._raw.type || `custom:${CARD_TAG}`;
+    fireEvent(this, "config-changed", { config: out });
+  }
+
+  _entityOptions(filter) {
+    if (!this._hass) return "";
+    return Object.keys(this._hass.states)
+      .filter((id) => !filter || filter(id))
+      .sort()
+      .map((id) => `<option value="${id}">${esc(this._hass.states[id].attributes.friendly_name || "")}</option>`)
+      .join("");
+  }
+
+  _render() {
+    if (!this._config) return;
+    if (this._config.layout_from) {
+      this.shadowRoot.innerHTML = `<style>${EDITOR_STYLES}</style><div class="ed"><div class="hint">
+        Dette kort henter sin plantegning fra <b>${esc(typeof this._config.layout_from === "string" ? this._config.layout_from : this._config.layout_from.dashboard)}</b>.
+        Rediger plantegningen dér – ændringer vises automatisk her. Brug kodeeditoren for at fjerne <code>layout_from</code>.</div></div>`;
+      return;
+    }
+    const hass = this._hass || { states: {} };
+    const r = new Renderer(this._config, hass, { edit: true, uid: this._uid });
+    const [W, H] = this._config.size;
+    const devMode = this._mode === "devices";
+
+    let overlay = "";
+    if (!devMode) {
+      overlay = this._config.rooms
+        .map((room, i) => {
+          const pts = room.points.map((p) => p.join(",")).join(" ");
+          const sel = this._sel && this._sel.kind === "room" && this._sel.i === i;
+          let s = `<polygon class="room-pick" data-pick="${i}" points="${pts}"/>`;
+          if (sel) {
+            s += `<polygon class="room-outline" points="${pts}"/>`;
+            s += room.points.map((p, vi) => `<circle class="handle" data-room="${i}" data-v="${vi}" cx="${p[0]}" cy="${p[1]}" r="12"/>`).join("");
+            const bb = bbox(room.points);
+            const [lx, ly] = room.label || [bb.cx, bb.cy];
+            s += `<circle class="handle label" data-room="${i}" data-v="label" cx="${lx}" cy="${ly + 22}" r="9"/>`;
+          }
+          return s;
+        })
+        .join("");
+    }
+
+    const stageSvg = r.svg().replace("</svg>", `<g class="ovl">${overlay}</g></svg>`);
+
+    this.shadowRoot.innerHTML = `<style>${EDITOR_STYLES}</style>
+      <div class="ed">
+        <div class="bar">
+          <button data-mode="devices" class="${devMode ? "on" : ""}">Enheder</button>
+          <button data-mode="rooms" class="${devMode ? "" : "on"}">Rum</button>
+          <span style="flex:1"></span>
+          ${devMode ? `<button data-act="add-dev">+ Enhed</button><button data-act="add-label">+ Måling</button>` : `<button data-act="add-room">+ Rum</button>`}
+        </div>
+        <div class="hint">${devMode
+          ? "Træk ikonerne på plads. Klik på et ikon for at ændre det. En lampe lyser det rum op, den står i."
+          : "Klik på et rum for at vælge det, og træk i hjørnerne. Den blå prik flytter navnet."}</div>
+        <div class="stage"><div class="wrap" style="aspect-ratio:${W}/${H}">${stageSvg}<div class="layer">${r.devicesHtml()}</div></div></div>
+        ${this._panel()}
+        <details><summary class="hint">Kortindstillinger</summary>
+          <div class="panel" style="margin-top:8px">
+            <label>Titel</label><input data-g="title" value="${esc(this._config.title || "")}">
+            <label>Størrelse</label><div class="grid2"><input data-g="w" type="number" value="${W}"><input data-g="h" type="number" value="${H}"></div>
+            <label>Tema</label><select data-g="theme">
+              ${["auto", "day", "night"].map((t) => `<option value="${t}" ${(this._config.theme || "auto") === t ? "selected" : ""}>${{ auto: "Auto (sol)", day: "Dag", night: "Nat" }[t]}</option>`).join("")}
+            </select>
+            <label>Glødstyrke</label><input data-g="glow_strength" type="range" min="0" max="1.5" step="0.05" value="${this._config.glow_strength ?? 1}">
+            <label>Test bevægelse</label><input data-g="preview_motion" type="checkbox" ${this._config.preview_motion ? "checked" : ""} style="width:auto">
+          </div>
+        </details>
+        <datalist id="ents">${this._entityOptions()}</datalist>
+        <datalist id="motion-ents">${this._entityOptions((id) => id.startsWith("binary_sensor."))}</datalist>
+      </div>`;
+    this._wire();
+  }
+
+  _panel() {
+    const s = this._sel;
+    if (!s) return "";
+    if (s.kind === "dev") {
+      const d = this._config.devices[s.i];
+      if (!d) return "";
+      const tap = (d.tap_action && d.tap_action.action) || "auto";
+      return `<div class="panel">
+        <h3>${d.type === "label" ? "Måling" : "Enhed"}</h3>
+        <label>Entitet</label><input data-d="entity" list="ents" value="${esc(d.entity || "")}">
+        ${d.type === "label" ? "" : `<label>Ikon</label><input data-d="icon" placeholder="mdi:lamp" value="${esc(d.icon || "")}">`}
+        <label>Tryk</label><select data-d="tap">
+          ${[["auto", "Automatisk"], ["toggle", "Tænd/sluk"], ["more-info", "Vis detaljer"], ["navigate", "Gå til side"], ["none", "Ingen"]]
+            .map(([v, t]) => `<option value="${v}" ${tap === v ? "selected" : ""}>${t}</option>`).join("")}
+        </select>
+        ${tap === "navigate" ? `<label>Sti</label><input data-d="nav" placeholder="/dashboard/side" value="${esc((d.tap_action && d.tap_action.navigation_path) || "")}">` : ""}
+        ${d.type === "label" ? "" : `<label>Gløder</label><select data-d="glow">
+          ${[["auto", "Automatisk (lamper)"], ["true", "Ja"], ["false", "Nej"]].map(([v, t]) => `<option value="${v}" ${String(d.glow === undefined ? "auto" : d.glow) === v ? "selected" : ""}>${t}</option>`).join("")}
+        </select>`}
+        <label>Position</label><div class="grid2"><input data-d="x" type="number" value="${Math.round(d.x)}"><input data-d="y" type="number" value="${Math.round(d.y)}"></div>
+        <div class="row"><button class="danger" data-act="del-dev">Slet</button><button data-act="dup-dev">Kopiér</button><button data-act="deselect">Luk</button></div>
+      </div>`;
+    }
+    const room = this._config.rooms[s.i];
+    if (!room) return "";
+    return `<div class="panel">
+      <h3>Rum</h3>
+      <label>Navn</label><input data-r="name" value="${esc(room.name || "")}">
+      <label>Bevægelse</label><input data-r="motion" list="motion-ents" placeholder="binary_sensor.x, binary_sensor.y" value="${esc(room.motion.join(", "))}">
+      <label>Tryk på rum</label><input data-r="entity" list="ents" placeholder="fx light.stue (valgfri)" value="${esc(room.entity || "")}">
+      <label>Vis navn</label><input data-r="show_name" type="checkbox" ${room.show_name === false ? "" : "checked"} style="width:auto">
+      <div class="row">
+        <button data-act="add-vertex">+ Hjørne</button>
+        <button data-act="del-vertex">− Hjørne</button>
+        <button class="danger" data-act="del-room">Slet rum</button>
+        <button data-act="deselect">Luk</button>
+      </div>
+      <div class="hint" style="grid-column:1/-1">Lamper behøver ikke at blive valgt her: alle lamper, der står i rummet, får det til at gløde.</div>
+    </div>`;
+  }
+
+  _toUnits(ev) {
+    const svg = this.shadowRoot.querySelector(".stage svg");
+    const rect = svg.getBoundingClientRect();
+    const [W, H] = this._config.size;
+    const snap = this._config.snap || 5;
+    const x = ((ev.clientX - rect.left) / rect.width) * W;
+    const y = ((ev.clientY - rect.top) / rect.height) * H;
+    return [Math.round(x / snap) * snap, Math.round(y / snap) * snap];
+  }
+
+  _wire() {
+    const root = this.shadowRoot;
+    root.querySelectorAll("[data-mode]").forEach((b) =>
+      b.addEventListener("click", () => {
+        this._mode = b.dataset.mode;
+        this._sel = null;
+        this._render();
+      })
+    );
+    root.querySelectorAll("[data-act]").forEach((b) => b.addEventListener("click", () => this._action(b.dataset.act)));
+
+    // Drag devices.
+    root.querySelectorAll(".stage .dev").forEach((el) => {
+      const i = Number(el.dataset.dev);
+      if (this._sel && this._sel.kind === "dev" && this._sel.i === i) el.classList.add("sel");
+      if (this._mode !== "devices") {
+        el.style.pointerEvents = "none";
+        return;
+      }
+      el.addEventListener("pointerdown", (ev) => this._startDrag(ev, el, (x, y) => {
+        const d = this._config.devices[i];
+        d.x = x;
+        d.y = y;
+        const [W, H] = this._config.size;
+        el.style.left = `${(x / W) * 100}%`;
+        el.style.top = `${(y / H) * 100}%`;
+      }, () => {
+        this._sel = { kind: "dev", i };
+      }));
+    });
+
+    // Rooms: pick and drag vertices / label.
+    root.querySelectorAll(".room-pick").forEach((el) =>
+      el.addEventListener("click", () => {
+        this._sel = { kind: "room", i: Number(el.dataset.pick) };
+        this._render();
+      })
+    );
+    root.querySelectorAll(".handle").forEach((el) => {
+      const ri = Number(el.dataset.room);
+      const v = el.dataset.v;
+      el.addEventListener("pointerdown", (ev) => this._startDrag(ev, el, (x, y) => {
+        const room = this._config.rooms[ri];
+        if (v === "label") {
+          room.label = [x, y - 22];
+        } else {
+          room.points[Number(v)] = [x, y];
+          this._lastVertex = Number(v);
+        }
+        el.setAttribute("cx", x);
+        el.setAttribute("cy", y);
+        const pts = room.points.map((p) => p.join(",")).join(" ");
+        root.querySelectorAll(".room-outline").forEach((o) => o.setAttribute("points", pts));
+      }, () => {}));
+    });
+
+    // Field edits.
+    root.querySelectorAll("[data-d]").forEach((inp) => inp.addEventListener("change", () => this._devField(inp.dataset.d, inp)));
+    root.querySelectorAll("[data-r]").forEach((inp) => inp.addEventListener("change", () => this._roomField(inp.dataset.r, inp)));
+    root.querySelectorAll("[data-g]").forEach((inp) => inp.addEventListener("change", () => this._globalField(inp.dataset.g, inp)));
+  }
+
+  _startDrag(ev, el, onMove, onClick) {
+    ev.preventDefault();
+    ev.stopPropagation();
+    el.setPointerCapture && el.setPointerCapture(ev.pointerId);
+    this._dragging = true;
+    let moved = false;
+    const sx = ev.clientX;
+    const sy = ev.clientY;
+    const move = (e) => {
+      if (!moved && Math.abs(e.clientX - sx) + Math.abs(e.clientY - sy) < 4) return;
+      moved = true;
+      const [x, y] = this._toUnits(e);
+      onMove(x, y);
+    };
+    const up = () => {
+      el.removeEventListener("pointermove", move);
+      el.removeEventListener("pointerup", up);
+      el.removeEventListener("pointercancel", up);
+      this._dragging = false;
+      onClick();
+      if (moved) this._emit();
+      this._render();
+    };
+    el.addEventListener("pointermove", move);
+    el.addEventListener("pointerup", up);
+    el.addEventListener("pointercancel", up);
+  }
+
+  _devField(key, inp) {
+    const d = this._config.devices[this._sel.i];
+    const v = inp.value.trim();
+    if (key === "entity") d.entity = v;
+    if (key === "icon") v ? (d.icon = v) : delete d.icon;
+    if (key === "x") d.x = Number(v);
+    if (key === "y") d.y = Number(v);
+    if (key === "glow") v === "auto" ? delete d.glow : (d.glow = v === "true");
+    if (key === "tap") {
+      if (v === "auto") delete d.tap_action;
+      else if (v === "navigate") d.tap_action = { action: "navigate", navigation_path: (d.tap_action && d.tap_action.navigation_path) || "/" };
+      else d.tap_action = { action: v };
+    }
+    if (key === "nav") d.tap_action = { action: "navigate", navigation_path: v };
+    this._emit();
+    this._render();
+  }
+
+  _roomField(key, inp) {
+    const room = this._config.rooms[this._sel.i];
+    const v = inp.type === "checkbox" ? inp.checked : inp.value.trim();
+    if (key === "name") {
+      room.name = v;
+      room.id = slug(v);
+    }
+    if (key === "motion") room.motion = v ? v.split(",").map((s) => s.trim()).filter(Boolean) : [];
+    if (key === "entity") v ? (room.entity = v) : delete room.entity;
+    if (key === "show_name") v ? delete room.show_name : (room.show_name = false);
+    this._emit();
+    this._render();
+  }
+
+  _globalField(key, inp) {
+    const c = this._config;
+    if (key === "title") inp.value ? (c.title = inp.value) : delete c.title;
+    if (key === "w") c.size = [Number(inp.value) || 850, c.size[1]];
+    if (key === "h") c.size = [c.size[0], Number(inp.value) || 1250];
+    if (key === "theme") inp.value === "auto" ? delete c.theme : (c.theme = inp.value);
+    if (key === "glow_strength") Number(inp.value) === 1 ? delete c.glow_strength : (c.glow_strength = Number(inp.value));
+    if (key === "preview_motion") inp.checked ? (c.preview_motion = true) : delete c.preview_motion;
+    this._emit();
+    this._render();
+  }
+
+  _action(act) {
+    const c = this._config;
+    const [W, H] = c.size;
+    if (act === "add-dev" || act === "add-label") {
+      const d = { entity: "", x: Math.round(W / 2), y: Math.round(H / 2) };
+      if (act === "add-label") d.type = "label";
+      c.devices.push(d);
+      this._sel = { kind: "dev", i: c.devices.length - 1 };
+    }
+    if (act === "dup-dev" && this._sel) {
+      const d = clone(c.devices[this._sel.i]);
+      d.x += 30;
+      d.y += 30;
+      c.devices.push(d);
+      this._sel = { kind: "dev", i: c.devices.length - 1 };
+    }
+    if (act === "del-dev" && this._sel) {
+      c.devices.splice(this._sel.i, 1);
+      this._sel = null;
+    }
+    if (act === "add-room") {
+      const w = Math.round(W / 4);
+      const h = Math.round(H / 6);
+      const x = Math.round(W / 2 - w / 2);
+      const y = Math.round(H / 2 - h / 2);
+      c.rooms.push({ name: `Rum ${c.rooms.length + 1}`, points: [[x, y], [x + w, y], [x + w, y + h], [x, y + h]], motion: [] });
+      this._sel = { kind: "room", i: c.rooms.length - 1 };
+    }
+    if (act === "del-room" && this._sel) {
+      c.rooms.splice(this._sel.i, 1);
+      this._sel = null;
+    }
+    if ((act === "add-vertex" || act === "del-vertex") && this._sel && this._sel.kind === "room") {
+      const pts = c.rooms[this._sel.i].points;
+      const vi = Math.min(this._lastVertex ?? pts.length - 1, pts.length - 1);
+      if (act === "add-vertex") {
+        const a = pts[vi];
+        const b = pts[(vi + 1) % pts.length];
+        pts.splice(vi + 1, 0, [Math.round((a[0] + b[0]) / 2), Math.round((a[1] + b[1]) / 2)]);
+        this._lastVertex = vi + 1;
+      } else if (pts.length > 3) {
+        pts.splice(vi, 1);
+        this._lastVertex = Math.max(0, vi - 1);
+      }
+    }
+    if (act === "deselect") this._sel = null;
+    if (act !== "deselect") this._emit();
+    this._render();
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Registration                                                         */
+/* ------------------------------------------------------------------ */
+
+if (!customElements.get(CARD_TAG)) customElements.define(CARD_TAG, GlowFloorplanCard);
+if (!customElements.get(EDITOR_TAG)) customElements.define(EDITOR_TAG, GlowFloorplanCardEditor);
+
+window.customCards = window.customCards || [];
+if (!window.customCards.some((c) => c.type === CARD_TAG)) {
+  window.customCards.push({
+    type: CARD_TAG,
+    name: "Glow Floorplan Card",
+    description: "Plantegning hvor rummene gløder i lampernes rigtige farve, pulserer ved bevægelse og kan redigeres med træk-og-slip.",
+    preview: true,
+    documentationURL: "https://github.com/DanielMikkelsen99/glow-floorplan-card",
+  });
+}
+
+console.info(`%c GLOW-FLOORPLAN-CARD %c v${VERSION} `, "color:#fff;background:#f5a623;font-weight:700", "color:#f5a623;background:#2e3442");
+
+// Exported for tests (no effect in Home Assistant).
+if (typeof window !== "undefined") window.__glowFloorplan = { Renderer, normalizeConfig, kelvinToRgb, pointInPolygon, findCard, VERSION };
