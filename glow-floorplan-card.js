@@ -10,7 +10,7 @@
  * License: MIT
  */
 
-const VERSION = "1.2.0";
+const VERSION = "1.2.1";
 const CARD_TAG = "glow-floorplan-card";
 const EDITOR_TAG = "glow-floorplan-card-editor";
 
@@ -886,9 +886,51 @@ class GlowFloorplanCardEditor extends HTMLElement {
     this._wirePanel();
   }
 
+  /** Make Home Assistant load its own editor pickers (ha-icon-picker etc.). */
+  async _loadPickers() {
+    if (customElements.get("ha-icon-picker") || this._pickerLoading) return;
+    this._pickerLoading = true;
+    try {
+      if (window.loadCardHelpers) {
+        const helpers = await window.loadCardHelpers();
+        const card = await helpers.createCardElement({ type: "entities", entities: [] });
+        if (card && card.constructor.getConfigElement) await card.constructor.getConfigElement();
+      }
+      await Promise.race([customElements.whenDefined("ha-icon-picker"), new Promise((r) => setTimeout(r, 3000))]);
+    } catch (e) {
+      /* fall back to the plain text field */
+    }
+    if (customElements.get("ha-icon-picker")) this._renderPanel();
+  }
+
+  _mountIconPicker(root) {
+    const slot = root.querySelector(".iconslot");
+    if (!slot || !this._sel || this._sel.kind !== "dev") return;
+    if (!customElements.get("ha-icon-picker")) {
+      this._loadPickers();
+      return;
+    }
+    const d = this._config.devices[this._sel.i];
+    const st = this._hass && this._hass.states[d.entity];
+    const picker = document.createElement("ha-icon-picker");
+    picker.hass = this._hass;
+    picker.value = d.icon || "";
+    picker.placeholder = (st && st.attributes.icon) || DEFAULT_ICONS[domainOf(d.entity)] || "mdi:lamp";
+    picker.style.display = "block";
+    picker.addEventListener("value-changed", (ev) => {
+      ev.stopPropagation();
+      const v = (ev.detail && ev.detail.value) || "";
+      v ? (d.icon = v) : delete d.icon;
+      this._emit();
+      this._renderStage();
+    });
+    slot.replaceChildren(picker);
+  }
+
   _wirePanel() {
     const root = this.shadowRoot.querySelector(".panelwrap");
     if (!root) return;
+    this._mountIconPicker(root);
     root.querySelectorAll("[data-act]").forEach((b) => b.addEventListener("click", () => this._action(b.dataset.act)));
     root.querySelectorAll("[data-d]").forEach((inp) => inp.addEventListener("change", () => this._devField(inp.dataset.d, inp)));
     root.querySelectorAll("[data-r]").forEach((inp) => inp.addEventListener("change", () => this._roomField(inp.dataset.r, inp)));
@@ -1274,7 +1316,7 @@ class GlowFloorplanCardEditor extends HTMLElement {
       return `<div class="panel">
         <h3>${d.type === "label" ? "Måling" : "Enhed"}</h3>
         <label>Entitet</label><input data-d="entity" list="ents" value="${esc(d.entity || "")}">
-        ${d.type === "label" ? "" : `<label>Ikon</label><input data-d="icon" placeholder="mdi:lamp" value="${esc(d.icon || "")}">`}
+        ${d.type === "label" ? "" : `<label>Ikon</label><div class="iconslot"><input data-d="icon" placeholder="mdi:lamp" value="${esc(d.icon || "")}"></div>`}
         <label>Tryk</label><select data-d="tap">
           ${[["auto", "Automatisk"], ["toggle", "Tænd/sluk"], ["more-info", "Vis detaljer"], ["navigate", "Gå til side"], ["none", "Ingen"]]
             .map(([v, t]) => `<option value="${v}" ${tap === v ? "selected" : ""}>${t}</option>`).join("")}
