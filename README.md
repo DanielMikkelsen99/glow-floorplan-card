@@ -141,7 +141,7 @@ Furniture is static: it is drawn like an architect's plan in 2D and as blocks in
 
 ### 3D view
 
-A **2D / 3D** switch sits in the corner of the card; the choice is remembered per browser. The 3D view shows the home from above at an angle, like a dollhouse in a game: low walls with doors and windows cut out, furniture as blocks, and the floors still glowing in the colour of the lamps.
+A **2D / 3D** switch sits in a row above the plan (never over it); the choice is remembered per browser. The 3D view shows the home from above at an angle, like a dollhouse in a game: low walls with doors and windows cut out, furniture as blocks, and the floors still glowing in the colour of the lamps.
 
 ```yaml
 view: 3d                 # default view (2d if omitted)
@@ -171,7 +171,7 @@ floors:
     furniture: [...]
 ```
 
-The card always opens on `default_floor` (pick it with **★ Standard** in the editor); add `remember_floor: true` to reopen the floor that was used last instead. With more than one floor the card shows floor buttons in the top-left corner; a dot shows lights (yellow) or motion (blue) on another floor. In the editor, pick a floor, rename it, move it left/right, add or delete floors. A single plan without `floors` keeps working unchanged.
+The card always opens on `default_floor` (pick it with **★ Standard** in the editor); add `remember_floor: true` to reopen the floor that was used last instead. With more than one floor the card shows floor buttons above the plan; a dot shows lights (yellow) or motion (blue) on another floor. In the editor, pick a floor, rename it, move it left/right, add or delete floors. A single plan without `floors` keeps working unchanged.
 
 ### Same plan on several dashboards
 
