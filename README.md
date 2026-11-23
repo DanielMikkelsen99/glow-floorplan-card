@@ -68,6 +68,14 @@ devices:
     y: 585
 ```
 
+### Editor
+
+The editor has three tabs:
+
+- **Enheder (Devices):** drag icons; click to edit.
+- **Rum (Rooms):** drag a whole room (the icons inside move with it) or its corners. Corners snap horizontally and vertically to their neighbours and to other rooms, with guide lines. Hold **Alt** to move freely.
+- **Åbninger (Openings):** drag the ends of an opening (they snap to walls and to 90°) or the dot in the middle to move it.
+
 ### Rooms
 
 | Key | Description |
