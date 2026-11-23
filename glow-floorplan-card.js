@@ -10,7 +10,7 @@
  * License: MIT
  */
 
-const VERSION = "1.1.0";
+const VERSION = "1.2.0";
 const CARD_TAG = "glow-floorplan-card";
 const EDITOR_TAG = "glow-floorplan-card-editor";
 
@@ -159,6 +159,9 @@ function normalizeConfig(config) {
   c.openings = (Array.isArray(c.openings) ? c.openings : [])
     .map((o) => (Array.isArray(o) ? { line: o.map(Number) } : o && Array.isArray(o.line) ? { ...o, line: o.line.map(Number) } : null))
     .filter(Boolean);
+  c.doors = (Array.isArray(c.doors) ? c.doors : [])
+    .filter((d) => d && Array.isArray(d.line))
+    .map((d) => ({ ...d, type: d.type === "window" ? "window" : "door", line: d.line.map(Number) }));
   c.rooms.forEach((r, i) => {
     r.id = r.id || slug(r.name || `rum_${i + 1}`);
     r.points = Array.isArray(r.points) ? r.points.map((p) => [Number(p[0]), Number(p[1])]) : [];
@@ -341,19 +344,104 @@ class Renderer {
       const busy = (d.ring_states || BUSY_STATES).includes(s.state);
       const err = ERROR_STATES.includes(s.state);
       if (!busy && !err) continue;
-      const col = err ? "#ff5252" : c.ring_color || "#4fc3f7";
-      pulses.push(`<circle class="ring" cx="${d.x}" cy="${d.y}" r="50" fill="none" stroke="${col}" stroke-width="5"/>`);
+      const col = err ? c.error_color || "#ff3b30" : c.ring_color || "#34c759";
+      pulses.push(`<circle class="pulse" cx="${d.x}" cy="${d.y}" r="34" fill="${col}" fill-opacity="0.35"/>`);
+      pulses.push(`<circle class="ring" cx="${d.x}" cy="${d.y}" r="55" fill="none" stroke="${col}" stroke-width="5"/>`);
+    }
+
+    const [doorBack, doorFront] = this.doorsSvg(p);
+    if (!this.edit) {
+      c.doors.forEach((d, i) => {
+        if (!d.sensor) return;
+        const [x1, y1, x2, y2] = d.line;
+        hits.push(`<circle class="room-hit" data-door="${i}" cx="${(x1 + x2) / 2}" cy="${(y1 + y2) / 2}" r="${Math.max(24, Math.hypot(x2 - x1, y2 - y1) / 2)}" fill="transparent"/>`);
+      });
     }
 
     return `<svg class="plan" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet">
       <defs>${defs.join("")}</defs>
       <g filter="url(#sh-${u})">${floor.join("")}</g>
       ${openings}
+      ${doorBack}
       <g>${glow.join("")}</g>
+      ${doorFront}
       <g>${pulses.join("")}</g>
       <g pointer-events="none">${labels.join("")}</g>
       <g>${hits.join("")}</g>
     </svg>`;
+  }
+
+  /**
+   * Doors and windows in architectural style. The first point of `line` is the
+   * hinge; `swing` (1 or -1) picks the side of the wall the leaf opens to.
+   * With a sensor the leaf is drawn open while the sensor is on, otherwise it
+   * is drawn closed with a dashed arc that shows how it opens.
+   */
+  doorsSvg(p) {
+    const back = [];
+    const front = [];
+    const night = this.mode() === "night";
+    const wallW = this.c.wall_width || 24;
+    const leafCol = night ? "#d5dbe8" : "#4a5366";
+    const arcCol = night ? "#8a93a8" : "#9aa3b5";
+    const openCol = this.c.door_open_color || "#ff9f0a";
+    const glass = night ? "#7fb8e6" : "#5aa9e6";
+    this.c.doors.forEach((d) => {
+      const [x1, y1, x2, y2] = d.line;
+      const L = Math.hypot(x2 - x1, y2 - y1);
+      if (L < 2) return;
+      const ux = (x2 - x1) / L;
+      const uy = (y2 - y1) / L;
+      const side = d.swing === -1 ? -1 : 1;
+      const nx = -uy * side;
+      const ny = ux * side;
+      const s = d.sensor ? this.st(d.sensor) : null;
+      const open = !!s && isOn(s);
+      const isWin = d.type === "window";
+      // Clear the wall where the door or window sits.
+      back.push(`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${p.opening}" stroke-width="${wallW + 2}"/>`);
+      // Wall stubs (jambs) at both ends.
+      [[x1, y1], [x2, y2]].forEach(([jx, jy]) =>
+        back.push(`<line x1="${jx - (nx * wallW) / 2}" y1="${jy - (ny * wallW) / 2}" x2="${jx + (nx * wallW) / 2}" y2="${jy + (ny * wallW) / 2}" stroke="${p.wall === "#ffffff" ? "#c9d0de" : p.wall}" stroke-width="3"/>`)
+      );
+      if (isWin) {
+        // Glass: two thin parallel lines in the wall.
+        const o = wallW / 5;
+        front.push(`<line x1="${x1 + nx * o}" y1="${y1 + ny * o}" x2="${x2 + nx * o}" y2="${y2 + ny * o}" stroke="${glass}" stroke-width="2.5"/>`);
+        front.push(`<line x1="${x1 - nx * o}" y1="${y1 - ny * o}" x2="${x2 - nx * o}" y2="${y2 - ny * o}" stroke="${glass}" stroke-width="2.5"/>`);
+        if (d.swing === 0) return; // fixed window
+      }
+      // One or two leaves. Each leaf: hinge h, closed tip c, open tip o.
+      const leaves = d.leaves === 2 ? 2 : 1;
+      const parts = [];
+      if (leaves === 1) parts.push({ hx: x1, hy: y1, len: L, dir: 1 });
+      else {
+        parts.push({ hx: x1, hy: y1, len: L / 2, dir: 1 });
+        parts.push({ hx: x2, hy: y2, len: L / 2, dir: -1 });
+      }
+      const col = open ? openCol : leafCol;
+      const lw = isWin ? 3 : 4;
+      parts.forEach(({ hx, hy, len, dir }) => {
+        const cx = hx + ux * len * dir;
+        const cy = hy + uy * len * dir;
+        const ox = hx + nx * len;
+        const oy = hy + ny * len;
+        // Sweep direction: from closed tip to open tip around the hinge.
+        const cross = (cx - hx) * (oy - hy) - (cy - hy) * (ox - hx);
+        const sweep = cross > 0 ? 1 : 0;
+        const arc = `M ${cx} ${cy} A ${len} ${len} 0 0 ${sweep} ${ox} ${oy}`;
+        if (open) {
+          front.push(`<path d="M ${hx} ${hy} L ${cx} ${cy} A ${len} ${len} 0 0 ${sweep} ${ox} ${oy} Z" fill="${openCol}" fill-opacity="0.14"/>`);
+          front.push(`<path d="${arc}" fill="none" stroke="${openCol}" stroke-width="2"/>`);
+          front.push(`<line class="leaf-open" x1="${hx}" y1="${hy}" x2="${ox}" y2="${oy}" stroke="${col}" stroke-width="${lw}" stroke-linecap="round"/>`);
+        } else {
+          front.push(`<path d="${arc}" fill="none" stroke="${arcCol}" stroke-width="1.6" stroke-dasharray="5 5"/>`);
+          if (!isWin) front.push(`<line x1="${hx}" y1="${hy}" x2="${cx}" y2="${cy}" stroke="${col}" stroke-width="${lw}" stroke-linecap="round"/>`);
+        }
+        front.push(`<circle cx="${hx}" cy="${hy}" r="${isWin ? 3 : 4}" fill="${col}"/>`);
+      });
+    });
+    return [back.join(""), front.join("")];
   }
 
   iconColor(d, s) {
@@ -366,7 +454,7 @@ class Renderer {
       const [r, g, b] = lightColor(s);
       return `rgb(${r},${g},${b})`;
     }
-    if (BUSY_STATES.includes(s.state)) return "#4fc3f7";
+    if (BUSY_STATES.includes(s.state)) return this.c.ring_color || "#34c759";
     return "var(--state-active-color, #ffc107)";
   }
 
@@ -404,6 +492,7 @@ class Renderer {
       [].concat(r.lights || []).forEach((l) => ids.add(l));
       if (r.entity) ids.add(r.entity);
     });
+    this.c.doors.forEach((d) => d.sensor && ids.add(d.sensor));
     let sig = "";
     for (const id of ids) {
       const s = this.st(id);
@@ -585,7 +674,13 @@ class GlowFloorplanCard extends HTMLElement {
         d.double_tap_action ? () => this._act(cfg, "double_tap") : null
       );
     });
-    root.querySelectorAll(".room-hit").forEach((el) => {
+    root.querySelectorAll(".room-hit[data-door]").forEach((el) => {
+      const d = this._config.doors[Number(el.dataset.door)];
+      if (!d || !d.sensor) return;
+      const cfg = { entity: d.sensor, tap_action: d.tap_action || { action: "more-info" } };
+      bindPress(el, () => this._act(cfg, "tap"));
+    });
+    root.querySelectorAll(".room-hit[data-room]").forEach((el) => {
       const room = this._config.rooms[Number(el.dataset.room)];
       if (!room) return;
       const cfg = {
@@ -651,6 +746,7 @@ const EDITOR_STYLES = `
   .handle { fill: #fff; stroke: var(--primary-color, #03a9f4); stroke-width: 3; cursor: grab; }
   .handle.label { fill: var(--primary-color, #03a9f4); }
   .handle.mid { fill: var(--primary-color, #03a9f4); stroke: #fff; }
+  .handle.hinge { fill: #ff9f0a; stroke: #fff; }
   .room-outline { fill: none; stroke: var(--primary-color, #03a9f4); stroke-width: 3; stroke-dasharray: 10 6; pointer-events: none; }
   .room-pick { fill: transparent; cursor: pointer; }
   .room-pick.sel { fill: rgba(3,169,244,0.06); cursor: move; }
@@ -675,6 +771,7 @@ const HINTS = {
   devices: "Træk ikonerne på plads. Klik på et ikon for at ændre det. En lampe lyser det rum op, den står i.",
   rooms: "Klik på et rum og træk det for at flytte det (ikonerne i rummet følger med). Træk i hjørnerne – de snapper vandret og lodret. Den blå prik flytter navnet. Hold Alt for at flytte frit.",
   openings: "En åbning fjerner væggen mellem to rum. Træk i enderne – de snapper til væggene og til 90°. Den udfyldte prik i midten flytter hele åbningen. Hold Alt for at flytte frit.",
+  doors: "Tegn døre og vinduer i væggene. Træk i enderne (de snapper til væggene) – den første ende er hængslet. Vælg en sensor, så vises døren åben, når sensoren melder åben.",
 };
 
 class GlowFloorplanCardEditor extends HTMLElement {
@@ -707,6 +804,7 @@ class GlowFloorplanCardEditor extends HTMLElement {
       if (r.id === slug(r.name)) delete r.id;
     });
     if (!out.openings.length) delete out.openings;
+    if (!out.doors.length) delete out.doors;
     out.type = (this._raw && this._raw.type) || `custom:${CARD_TAG}`;
     fireEvent(this, "config-changed", { config: out });
   }
@@ -737,6 +835,7 @@ class GlowFloorplanCardEditor extends HTMLElement {
       devices: `<button data-act="add-dev">+ Enhed</button><button data-act="add-label">+ Måling</button>`,
       rooms: `<button data-act="add-room">+ Rum</button>`,
       openings: `<button data-act="add-op">+ Åbning</button>`,
+      doors: `<button data-act="add-door">+ Dør</button><button data-act="add-window">+ Vindue</button>`,
     }[m];
     this.shadowRoot.innerHTML = `<style>${EDITOR_STYLES}</style>
       <div class="ed">
@@ -745,6 +844,7 @@ class GlowFloorplanCardEditor extends HTMLElement {
             <button data-mode="devices" class="${m === "devices" ? "on" : ""}">Enheder</button>
             <button data-mode="rooms" class="${m === "rooms" ? "on" : ""}">Rum</button>
             <button data-mode="openings" class="${m === "openings" ? "on" : ""}">Åbninger</button>
+            <button data-mode="doors" class="${m === "doors" ? "on" : ""}">Døre &amp; vinduer</button>
           </div>
           <span style="flex:1"></span>${add}
         </div>
@@ -793,6 +893,7 @@ class GlowFloorplanCardEditor extends HTMLElement {
     root.querySelectorAll("[data-d]").forEach((inp) => inp.addEventListener("change", () => this._devField(inp.dataset.d, inp)));
     root.querySelectorAll("[data-r]").forEach((inp) => inp.addEventListener("change", () => this._roomField(inp.dataset.r, inp)));
     root.querySelectorAll("[data-o]").forEach((inp) => inp.addEventListener("change", () => this._opField(inp.dataset.o, inp)));
+    root.querySelectorAll("[data-w]").forEach((inp) => inp.addEventListener("change", () => this._doorField(inp.dataset.w, inp)));
   }
 
   _overlay() {
@@ -818,16 +919,18 @@ class GlowFloorplanCardEditor extends HTMLElement {
         }
       }
     }
-    if (this._mode === "openings") {
-      c.openings.forEach((o, i) => {
+    if (this._mode === "openings" || this._mode === "doors") {
+      const coll = this._mode;
+      const kind = coll === "doors" ? "door" : "op";
+      c[coll].forEach((o, i) => {
         const [x1, y1, x2, y2] = o.line;
-        const sel = s && s.kind === "op" && s.i === i;
+        const sel = s && s.kind === kind && s.i === i;
         out += `<line class="op-line${sel ? " sel" : ""}" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"/>`;
-        out += `<line class="op-hit" data-op="${i}" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"/>`;
+        out += `<line class="op-hit" data-coll="${coll}" data-op="${i}" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"/>`;
         if (sel) {
-          out += `<circle class="handle" data-op="${i}" data-end="0" cx="${x1}" cy="${y1}" r="13"/>`;
-          out += `<circle class="handle" data-op="${i}" data-end="1" cx="${x2}" cy="${y2}" r="13"/>`;
-          out += `<circle class="handle mid" data-op="${i}" data-end="mid" cx="${(x1 + x2) / 2}" cy="${(y1 + y2) / 2}" r="11"/>`;
+          out += `<circle class="handle${coll === "doors" ? " hinge" : ""}" data-coll="${coll}" data-op="${i}" data-end="0" cx="${x1}" cy="${y1}" r="13"/>`;
+          out += `<circle class="handle" data-coll="${coll}" data-op="${i}" data-end="1" cx="${x2}" cy="${y2}" r="13"/>`;
+          out += `<circle class="handle mid" data-coll="${coll}" data-op="${i}" data-end="mid" cx="${(x1 + x2) / 2}" cy="${(y1 + y2) / 2}" r="11"/>`;
         }
       });
     }
@@ -1061,16 +1164,16 @@ class GlowFloorplanCardEditor extends HTMLElement {
     // Openings: select, drag ends (snap to walls and 90°) or the middle.
     stage.querySelectorAll(".op-hit").forEach((el) => {
       const i = Number(el.dataset.op);
-      el.addEventListener("pointerdown", (ev) => this._dragOpening(ev, i, "mid"));
+      el.addEventListener("pointerdown", (ev) => this._dragOpening(ev, i, "mid", el.dataset.coll));
     });
     stage.querySelectorAll(".handle[data-op]").forEach((el) => {
-      el.addEventListener("pointerdown", (ev) => this._dragOpening(ev, Number(el.dataset.op), el.dataset.end));
+      el.addEventListener("pointerdown", (ev) => this._dragOpening(ev, Number(el.dataset.op), el.dataset.end, el.dataset.coll));
     });
   }
 
-  _dragOpening(ev, i, end) {
+  _dragOpening(ev, i, end, coll = "openings") {
     const c = this._config;
-    const o = c.openings[i];
+    const o = c[coll][i];
     const start = [...o.line];
     const [px, py] = this._toUnits(ev, false);
     const corners = this._corners(-1).map((q) => q.p);
@@ -1121,7 +1224,7 @@ class GlowFloorplanCardEditor extends HTMLElement {
         if (end === "0") o.line = [x, y, o.line[2], o.line[3]];
         else o.line = [o.line[0], o.line[1], x, y];
       },
-      onEnd: () => (this._sel = { kind: "op", i }),
+      onEnd: () => (this._sel = { kind: coll === "doors" ? "door" : "op", i }),
     });
   }
 
@@ -1182,6 +1285,28 @@ class GlowFloorplanCardEditor extends HTMLElement {
         </select>`}
         <label>Position</label><div class="grid2"><input data-d="x" type="number" value="${Math.round(d.x)}"><input data-d="y" type="number" value="${Math.round(d.y)}"></div>
         <div class="row"><button class="danger" data-act="del-dev">Slet</button><button data-act="dup-dev">Kopiér</button><button data-act="deselect">Luk</button></div>
+      </div>`;
+    }
+    if (s.kind === "door") {
+      const d = this._config.doors[s.i];
+      if (!d) return "";
+      const isWin = d.type === "window";
+      return `<div class="panel">
+        <h3>${isWin ? "Vindue" : "Dør"}</h3>
+        <label>Type</label><select data-w="type">
+          <option value="door" ${isWin ? "" : "selected"}>Dør</option><option value="window" ${isWin ? "selected" : ""}>Vindue</option>
+        </select>
+        <label>Fløje</label><select data-w="leaves">
+          <option value="1" ${d.leaves === 2 ? "" : "selected"}>Én fløj</option><option value="2" ${d.leaves === 2 ? "selected" : ""}>To fløje</option>
+        </select>
+        ${isWin ? `<label>Fast vindue</label><input data-w="fixed" type="checkbox" ${d.swing === 0 ? "checked" : ""}>` : ""}
+        <label>Sensor</label><input data-w="sensor" list="motion-ents" placeholder="binary_sensor.hoveddor (valgfri)" value="${esc(d.sensor || "")}">
+        <div class="row">
+          <button data-act="flip-swing">⇅ Vend åbningsretning</button>
+          <button data-act="flip-hinge">⇆ Vend hængsel</button>
+        </div>
+        <div class="row"><button class="danger" data-act="del-door">Slet</button><button data-act="deselect">Luk</button></div>
+        <div class="hint" style="grid-column:1/-1">Den orange prik er hængslet. Uden sensor vises ${isWin ? "vinduet" : "døren"} lukket, og den stiplede bue viser, hvordan den åbner.</div>
       </div>`;
     }
     if (s.kind === "op") {
@@ -1258,6 +1383,17 @@ class GlowFloorplanCardEditor extends HTMLElement {
     this._renderStage();
   }
 
+  _doorField(key, inp) {
+    const d = this._config.doors[this._sel.i];
+    if (key === "type") d.type = inp.value;
+    if (key === "leaves") inp.value === "2" ? (d.leaves = 2) : delete d.leaves;
+    if (key === "fixed") inp.checked ? (d.swing = 0) : delete d.swing;
+    if (key === "sensor") inp.value.trim() ? (d.sensor = inp.value.trim()) : delete d.sensor;
+    this._emit();
+    this._renderStage();
+    if (key === "type") this._renderPanel();
+  }
+
   _globalField(key, inp) {
     const c = this._config;
     if (key === "title") inp.value ? (c.title = inp.value) : delete c.title;
@@ -1329,6 +1465,39 @@ class GlowFloorplanCardEditor extends HTMLElement {
       }
       c.openings.push({ line });
       this._sel = { kind: "op", i: c.openings.length - 1 };
+    }
+    if (act === "add-door" || act === "add-window") {
+      const win = act === "add-window";
+      const len = win ? 90 : 80;
+      // Put it on the top wall of the first room, or in the middle of the plan.
+      let line = [Math.round(W / 2 - len / 2), Math.round(H / 2), Math.round(W / 2 + len / 2), Math.round(H / 2)];
+      const r = c.rooms[0];
+      if (r && r.points.length > 1) {
+        const [a, b] = r.points;
+        const mx = (a[0] + b[0]) / 2;
+        const my = (a[1] + b[1]) / 2;
+        const horiz = Math.abs(b[1] - a[1]) < Math.abs(b[0] - a[0]);
+        line = (horiz ? [mx - len / 2, my, mx + len / 2, my] : [mx, my - len / 2, mx, my + len / 2]).map((n) => Math.round(n));
+      }
+      c.doors.push(win ? { type: "window", line } : { type: "door", line });
+      this._sel = { kind: "door", i: c.doors.length - 1 };
+    }
+    if (act === "del-door" && this._sel) {
+      c.doors.splice(this._sel.i, 1);
+      this._sel = null;
+    }
+    if (act === "flip-swing" && this._sel) {
+      const d = c.doors[this._sel.i];
+      d.swing === -1 ? delete d.swing : (d.swing = -1);
+    }
+    if (act === "flip-hinge" && this._sel) {
+      // Swap the ends; keep the leaf on the same side of the wall.
+      const d = c.doors[this._sel.i];
+      const [x1, y1, x2, y2] = d.line;
+      d.line = [x2, y2, x1, y1];
+      if (d.swing === 0) {
+        // fixed window: nothing to flip
+      } else d.swing === -1 ? delete d.swing : (d.swing = -1);
     }
     if (act === "del-op" && this._sel) {
       c.openings.splice(this._sel.i, 1);

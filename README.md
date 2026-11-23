@@ -75,6 +75,7 @@ The editor has three tabs:
 - **Enheder (Devices):** drag icons; click to edit.
 - **Rum (Rooms):** drag a whole room (the icons inside move with it) or its corners. Corners snap horizontally and vertically to their neighbours and to other rooms, with guide lines. Hold **Alt** to move freely.
 - **Åbninger (Openings):** drag the ends of an opening (they snap to walls and to 90°) or the dot in the middle to move it.
+- **Døre & vinduer (Doors & windows):** draw doors and windows in the walls. The orange end is the hinge. Flip the hinge or the swing side with one click, choose one or two leaves, and link a sensor.
 
 ### Rooms
 
@@ -105,6 +106,23 @@ The editor has three tabs:
 | `attribute`, `prefix`, `suffix`, `decimals` | For labels |
 
 Lights glow inside the room they stand in. Lights outside every room (outdoor lamps) get a soft halo.
+
+### Doors and windows
+
+```yaml
+doors:
+  - type: door                 # door | window
+    line: [100, 760, 100, 840] # first point is the hinge
+    swing: -1                  # 1 (default) or -1: which side of the wall it opens to; 0 = fixed window
+    leaves: 2                  # optional: double door / window
+    sensor: binary_sensor.front_door  # optional
+```
+
+Without a sensor a door is drawn closed with a dashed arc that shows how it opens. With a sensor the leaf swings open (in orange) while the sensor reports open; tapping it opens the sensor's details.
+
+### Robots
+
+Vacuums and mowers pulse green while they work and red on error (`ring_color`, `error_color` to change).
 
 ### Same plan on several dashboards
 
