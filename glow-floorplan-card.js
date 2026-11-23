@@ -10,7 +10,7 @@
  * License: MIT
  */
 
-const VERSION = "1.3.0";
+const VERSION = "1.3.1";
 const CARD_TAG = "glow-floorplan-card";
 const EDITOR_TAG = "glow-floorplan-card-editor";
 
@@ -599,6 +599,8 @@ class Renderer {
       ...this.c.doors.map((d) => ({ line: d.line, kind: d.type === "window" ? "glass" : "gap" })),
     ];
     const segs = [];
+    const ww = this.c.wall_width || 24;
+    const gapTol = ww + 12;
     for (const r of this.c.rooms) {
       const P = r.points;
       for (let i = 0; i < P.length; i++) {
@@ -612,7 +614,8 @@ class Renderer {
         for (const c of cut) {
           const [x1, y1, x2, y2] = c.line;
           const dist = (x, y) => Math.abs((x - ax) * dy - (y - ay) * dx) / L;
-          if (dist(x1, y1) > 6 || dist(x2, y2) > 6) continue;
+          // Cut the wall it sits in and the neighbouring room's parallel wall next to it.
+          if (dist(x1, y1) > gapTol || dist(x2, y2) > gapTol) continue;
           let t1 = ((x1 - ax) * dx + (y1 - ay) * dy) / (L * L);
           let t2 = ((x2 - ax) * dx + (y2 - ay) * dy) / (L * L);
           if (t1 > t2) [t1, t2] = [t2, t1];
@@ -632,7 +635,88 @@ class Renderer {
         push(t, 1, "wall");
       }
     }
-    return segs;
+    return this.mergeWalls(segs, gapTol);
+  }
+
+  /**
+   * Neighbouring rooms each have their own wall, usually a few units apart.
+   * In 3D that shows up as two thin walls with a slot between them, so
+   * parallel axis-aligned walls that face each other are merged into one
+   * solid wall that fills the space between them.
+   */
+  mergeWalls(segs, maxGap) {
+    const t = (this.c.wall_width || 24) * 0.55;
+    const out = [];
+    const groups = { h: [], v: [] };
+    for (const sg of segs) {
+      const [ax, ay] = sg.a;
+      const [bx, by] = sg.b;
+      if (Math.abs(ay - by) < 0.5) groups.h.push({ pos: (ay + by) / 2, lo: Math.min(ax, bx), hi: Math.max(ax, bx), kind: sg.kind, thick: t });
+      else if (Math.abs(ax - bx) < 0.5) groups.v.push({ pos: (ax + bx) / 2, lo: Math.min(ay, by), hi: Math.max(ay, by), kind: sg.kind, thick: t });
+      else out.push(sg);
+    }
+    const rest = (it, lo, hi) => {
+      const r = [];
+      if (lo - it.lo > 1) r.push({ ...it, hi: lo });
+      if (it.hi - hi > 1) r.push({ ...it, lo: hi });
+      return r;
+    };
+    for (const key of ["h", "v"]) {
+      let items = groups[key];
+      for (let guard = 0; guard < 500; guard++) {
+        let found = null;
+        for (let i = 0; i < items.length && !found; i++) {
+          for (let j = i + 1; j < items.length && !found; j++) {
+            const A = items[i];
+            const B = items[j];
+            const lo = Math.max(A.lo, B.lo);
+            const hi = Math.min(A.hi, B.hi);
+            if (hi - lo <= 1) continue;
+            const gap = Math.abs(A.pos - B.pos);
+            if (gap <= 0.5 && A.kind === B.kind) found = { i, j, merged: { ...A, lo: Math.min(A.lo, B.lo), hi: Math.max(A.hi, B.hi) }, union: true };
+            else if (gap > 0.5 && gap <= maxGap && A.thick === t && B.thick === t) {
+              // Fill from the outer face of one wall to the outer face of the other.
+              const top = Math.min(A.pos, B.pos) - t / 2;
+              const bot = Math.max(A.pos, B.pos) + t / 2;
+              const kind = A.kind === "glass" || B.kind === "glass" ? "glass" : "wall";
+              found = { i, j, merged: { pos: (top + bot) / 2, lo, hi, kind, thick: bot - top }, lo, hi };
+            }
+          }
+        }
+        if (!found) break;
+        const { i, j, merged } = found;
+        const A = items[i];
+        const B = items[j];
+        const next = items.filter((_, k) => k !== i && k !== j);
+        if (!found.union) next.push(...rest(A, found.lo, found.hi), ...rest(B, found.lo, found.hi));
+        next.push(merged);
+        items = next;
+      }
+      groups[key] = items;
+    }
+    // Close corners and T-junctions: stretch each wall end into the wall it meets.
+    for (const [key, other] of [["h", "v"], ["v", "h"]]) {
+      const ext = groups[key].map((A) => {
+        let lo = A.lo;
+        let hi = A.hi;
+        for (const B of groups[other]) {
+          const reach = B.thick / 2 + A.thick / 2 + 4;
+          if (A.pos < B.lo - reach || A.pos > B.hi + reach) continue;
+          if (Math.abs(B.pos - A.lo) <= reach) lo = Math.min(lo, B.pos - B.thick / 2);
+          if (Math.abs(B.pos - A.hi) <= reach) hi = Math.max(hi, B.pos + B.thick / 2);
+        }
+        return { ...A, lo, hi };
+      });
+      groups[key + "x"] = ext;
+    }
+    for (const key of ["h", "v"]) {
+      for (const it of groups[key + "x"]) {
+        const a = key === "h" ? [it.lo, it.pos] : [it.pos, it.lo];
+        const b = key === "h" ? [it.hi, it.pos] : [it.pos, it.hi];
+        out.push({ a, b, kind: it.kind, thick: it.thick });
+      }
+    }
+    return out;
   }
 
   /** A box (prism) from a 2D footprint, between z0 and z1; returns visible faces. */
@@ -683,8 +767,9 @@ class Renderer {
       const [ax, ay] = s.a;
       const [bx, by] = s.b;
       const L = Math.hypot(bx - ax, by - ay);
-      const nx = (-(by - ay) / L) * (t / 2);
-      const ny = ((bx - ax) / L) * (t / 2);
+      const th = s.thick || t;
+      const nx = (-(by - ay) / L) * (th / 2);
+      const ny = ((bx - ax) / L) * (th / 2);
       const foot = [[ax + nx, ay + ny], [bx + nx, by + ny], [bx - nx, by - ny], [ax - nx, ay - ny]];
       let svg;
       if (s.kind === "glass") {
