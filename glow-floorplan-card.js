@@ -10,7 +10,7 @@
  * License: MIT
  */
 
-const VERSION = "1.2.1";
+const VERSION = "1.3.0";
 const CARD_TAG = "glow-floorplan-card";
 const EDITOR_TAG = "glow-floorplan-card-editor";
 
@@ -162,12 +162,178 @@ function normalizeConfig(config) {
   c.doors = (Array.isArray(c.doors) ? c.doors : [])
     .filter((d) => d && Array.isArray(d.line))
     .map((d) => ({ ...d, type: d.type === "window" ? "window" : "door", line: d.line.map(Number) }));
+  c.furniture = (Array.isArray(c.furniture) ? c.furniture : [])
+    .filter((f) => f && f.type)
+    .map((f) => ({ ...f, x: Number(f.x) || 0, y: Number(f.y) || 0 }));
   c.rooms.forEach((r, i) => {
     r.id = r.id || slug(r.name || `rum_${i + 1}`);
     r.points = Array.isArray(r.points) ? r.points.map((p) => [Number(p[0]), Number(p[1])]) : [];
     r.motion = r.motion ? [].concat(r.motion) : [];
   });
   return c;
+}
+
+/* ------------------------------------------------------------------ */
+/* Furniture (static, drawn top-down like an architect's plan)          */
+/* ------------------------------------------------------------------ */
+
+/** Default size (canvas units, roughly 1 unit = 1.2 cm) and 3D height per type. */
+const FURNITURE = {
+  single_bed: { name: "Enkeltseng", w: 75, h: 165, z: 40 },
+  double_bed: { name: "Dobbeltseng", w: 150, h: 165, z: 40 },
+  sofa_2: { name: "Sofa, 2 pers.", w: 140, h: 75, z: 60 },
+  sofa_3: { name: "Sofa, 3 pers.", w: 190, h: 75, z: 60 },
+  sofa_corner: { name: "Hjørnesofa", w: 190, h: 160, z: 60 },
+  armchair: { name: "Lænestol", w: 70, h: 70, z: 60 },
+  dining_table: { name: "Spisebord", w: 165, h: 100, z: 55, chairs: true },
+  coffee_table: { name: "Sofabord", w: 95, h: 50, z: 32 },
+  dresser: { name: "Kommode", w: 85, h: 40, z: 70 },
+  cabinet: { name: "Skab", w: 85, h: 50, z: 150 },
+  toilet: { name: "Toilet", w: 35, h: 55, z: 35 },
+  shower: { name: "Bruser", w: 75, h: 75, z: 3 },
+  kitchen_counter: { name: "Køkkenbord", w: 200, h: 50, z: 75 },
+};
+
+const FURN_PALETTE = {
+  day: { fur: "#ffffff", line: "#b3bccd", accent: "#dde3ee", soft: "#f3f5f9", wood: "#e8dcc9", metal: "#c7ced9", side: "#d6dce7", side2: "#c6cdda" },
+  night: { fur: "#586176", line: "#7d879e", accent: "#4a5368", soft: "#525b70", wood: "#635a4c", metal: "#6d778d", side: "#434b5e", side2: "#3a4253" },
+};
+
+function furnitureSize(f) {
+  const spec = FURNITURE[f.type] || { w: 80, h: 60, z: 40 };
+  return [Number(f.w) || spec.w, Number(f.h) || spec.h, spec];
+}
+
+/** Top-down drawing of one piece in local coordinates (0..w, 0..h); the back is at y = 0. */
+function furnitureDrawing(type, w, h, q, part = "all") {
+  const R = (x, y, ww, hh, fill, rx = 4, extra = "") =>
+    `<rect x="${x}" y="${y}" width="${Math.max(0, ww)}" height="${Math.max(0, hh)}" rx="${rx}" fill="${fill}" stroke="${q.line}" stroke-width="1.5" ${extra}/>`;
+  const L = (x1, y1, x2, y2, extra = "") => `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${q.line}" stroke-width="1.5" ${extra}/>`;
+  const C = (cx, cy, r, fill = "none") => `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${fill}" stroke="${q.line}" stroke-width="1.5"/>`;
+  const out = [];
+  switch (type) {
+    case "single_bed":
+    case "double_bed": {
+      const n = type === "double_bed" ? 2 : 1;
+      out.push(R(0, 0, w, h, q.fur, 6));
+      out.push(R(0, 0, w, h * 0.06, q.accent, 3));
+      const gap = 6;
+      const pw = (w - 12 - gap * (n - 1)) / n;
+      for (let i = 0; i < n; i++) out.push(R(6 + i * (pw + gap), h * 0.09, pw, h * 0.15, q.soft, 7));
+      out.push(R(3, h * 0.3, w - 6, h * 0.7 - 3, q.accent, 6));
+      out.push(L(3, h * 0.38, w - 3, h * 0.38, 'stroke-opacity="0.6"'));
+      break;
+    }
+    case "sofa_2":
+    case "sofa_3":
+    case "armchair": {
+      const seats = type === "sofa_3" ? 3 : type === "sofa_2" ? 2 : 1;
+      const a = Math.min(16, w * 0.14);
+      out.push(R(0, 0, w, h, q.accent, 10));
+      out.push(R(0, 0, w, h * 0.28, q.accent, 8));
+      out.push(R(0, 0, a, h, q.accent, 8));
+      out.push(R(w - a, 0, a, h, q.accent, 8));
+      const sw = (w - 2 * a - 3 * (seats - 1)) / seats;
+      for (let i = 0; i < seats; i++) out.push(R(a + i * (sw + 3), h * 0.28, sw, h * 0.72 - 3, q.fur, 6));
+      break;
+    }
+    case "sofa_corner": {
+      const D = Math.min(75, w * 0.45, h * 0.45);
+      const a = 14;
+      out.push(R(0, 0, w, D, q.accent, 10));
+      out.push(R(0, 0, D, h, q.accent, 10));
+      out.push(R(0, 0, w, D * 0.28, q.accent, 8));
+      out.push(R(0, 0, D * 0.28, h, q.accent, 8));
+      out.push(R(w - a, 0, a, D, q.accent, 7));
+      out.push(R(0, h - a, D, a, q.accent, 7));
+      const x0 = D;
+      const top = (w - a - x0 - 3) / 2;
+      for (let i = 0; i < 2; i++) out.push(R(x0 + i * (top + 3), D * 0.28, top, D * 0.72 - 3, q.fur, 6));
+      out.push(R(D * 0.28, D * 0.28, D * 0.72, D * 0.72, q.fur, 6));
+      const y0 = D;
+      const left = h - a - y0 - 3;
+      out.push(R(D * 0.28, y0 + 3, D * 0.72 - 3, left, q.fur, 6));
+      break;
+    }
+    case "dining_table": {
+      const c = 18;
+      if (part !== "top") {
+        const n = Math.max(1, Math.round((w - 2 * c) / 55));
+        const cw = 30;
+        const step = (w - 2 * c) / n;
+        for (let i = 0; i < n; i++) {
+          const x = c + step * i + (step - cw) / 2;
+          out.push(R(x, 1, cw, c - 3, q.fur, 4));
+          out.push(R(x, h - c + 2, cw, c - 3, q.fur, 4));
+        }
+        if (h - 2 * c >= 30) {
+          out.push(R(1, h / 2 - 15, c - 3, 30, q.fur, 4));
+          out.push(R(w - c + 2, h / 2 - 15, c - 3, 30, q.fur, 4));
+        }
+      }
+      if (part !== "floor") out.push(R(c, c, w - 2 * c, h - 2 * c, q.wood, 4));
+      break;
+    }
+    case "coffee_table":
+      out.push(R(0, 0, w, h, q.wood, 8));
+      out.push(R(5, 5, w - 10, h - 10, "none", 5, 'stroke-opacity="0.5"'));
+      break;
+    case "dresser":
+      out.push(R(0, 0, w, h, q.wood, 3));
+      out.push(L(2, h - 6, w - 2, h - 6));
+      for (const fx of [0.25, 0.5, 0.75]) out.push(L(w * fx, h - 6, w * fx, h - 2, 'stroke-opacity="0.7"'));
+      break;
+    case "cabinet":
+      out.push(R(0, 0, w, h, q.fur, 2));
+      out.push(L(0, 0, w, h, 'stroke-opacity="0.45"'));
+      out.push(L(w, 0, 0, h, 'stroke-opacity="0.45"'));
+      out.push(L(w / 2, h - 8, w / 2, h));
+      break;
+    case "toilet":
+      out.push(R(w * 0.08, 0, w * 0.84, h * 0.3, q.fur, 3));
+      out.push(`<ellipse cx="${w / 2}" cy="${h * 0.63}" rx="${w * 0.44}" ry="${h * 0.36}" fill="${q.fur}" stroke="${q.line}" stroke-width="1.5"/>`);
+      out.push(`<ellipse cx="${w / 2}" cy="${h * 0.66}" rx="${w * 0.27}" ry="${h * 0.22}" fill="${q.soft}" stroke="${q.line}" stroke-width="1.2"/>`);
+      break;
+    case "shower":
+      out.push(R(0, 0, w, h, q.soft, 3));
+      out.push(L(0, 0, w, h, 'stroke-opacity="0.35"'));
+      out.push(L(w, 0, 0, h, 'stroke-opacity="0.35"'));
+      out.push(C(w / 2, h / 2, Math.max(3, Math.min(w, h) * 0.06), q.metal));
+      break;
+    case "kitchen_counter": {
+      out.push(R(0, 0, w, h, q.fur, 2));
+      out.push(L(0, h - 4, w, h - 4, 'stroke-opacity="0.6"'));
+      const sw = Math.min(55, w * 0.3);
+      out.push(R(w * 0.12, h * 0.18, sw, h * 0.6, q.metal, 6));
+      out.push(C(w * 0.12 + sw / 2, h * 0.1, 3, q.metal));
+      if (w >= 120) {
+        const hx = w * 0.12 + sw + Math.max(20, w * 0.12);
+        const r = Math.min(9, h * 0.17);
+        for (const [dx, dy] of [[0, 0], [1, 0], [0, 1], [1, 1]]) out.push(C(hx + r + dx * (r * 2.6), h * 0.3 + dy * (r * 2.4), r));
+      }
+      break;
+    }
+    default:
+      out.push(R(0, 0, w, h, q.fur, 4));
+  }
+  return out.join("");
+}
+
+/** 2D placement transform: x, y is the top-left corner before rotation; rotation is about the centre. */
+function furnitureTransform(f, w, h) {
+  return `translate(${f.x} ${f.y}) rotate(${Number(f.rotation) || 0} ${w / 2} ${h / 2})`;
+}
+
+/** World corners of a piece (clockwise from its local top-left). */
+function furnitureCorners(f, w, h) {
+  const a = ((Number(f.rotation) || 0) * Math.PI) / 180;
+  const cx = f.x + w / 2;
+  const cy = f.y + h / 2;
+  return [[0, 0], [w, 0], [w, h], [0, h]].map(([lx, ly]) => {
+    const dx = lx - w / 2;
+    const dy = ly - h / 2;
+    return [cx + dx * Math.cos(a) - dy * Math.sin(a), cy + dx * Math.sin(a) + dy * Math.cos(a)];
+  });
 }
 
 /* ------------------------------------------------------------------ */
@@ -204,6 +370,14 @@ const STYLES = `
   @keyframes gfp-ring { 0% { opacity: .9; transform: scale(.35); } 100% { opacity: 0; transform: scale(1); } }
   .glow { transition: opacity .6s ease; }
   .warn { padding: 12px 16px; color: var(--error-color, #db4437); }
+  .outer { position: relative; }
+  .viewbtn {
+    position: absolute; top: 10px; right: 10px; z-index: 2; display: inline-flex; gap: 2px; padding: 3px;
+    border: 1px solid rgba(255,255,255,0.35); border-radius: 999px; cursor: pointer; font: 600 12px/1 Helvetica, Arial, sans-serif;
+    background: rgba(30,36,52,0.35); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  }
+  .viewbtn span { padding: 5px 9px; border-radius: 999px; color: rgba(255,255,255,0.85); }
+  .viewbtn span.on { background: rgba(255,255,255,0.9); color: #2e3442; }
   @media (prefers-reduced-motion: reduce) { .pulse, .ring { animation: none; opacity: .6; } }
 `;
 
@@ -212,6 +386,7 @@ class Renderer {
     this.c = config;
     this.hass = hass;
     this.edit = !!opts.edit;
+    this.is3d = !!opts.is3d;
     this.uid = opts.uid || Math.random().toString(36).slice(2, 8);
   }
 
@@ -253,21 +428,16 @@ class Renderer {
     return out;
   }
 
-  svg() {
+  /** Everything that lies flat on the floor, in plan coordinates. Shared by 2D and 3D. */
+  parts() {
     const c = this.c;
-    const [W, H] = c.size;
     const p = PALETTE[this.mode()];
+    const q = FURN_PALETTE[this.mode()];
     const u = this.uid;
     const glowStrength = c.glow_strength === undefined ? 1 : Number(c.glow_strength);
+    const out = { defs: [], floor: [], glow: [], pulses: [], labels: [], hits: [], furniture: [], furnitureFloor: [], openings: "", p, q };
 
-    const defs = [];
-    const floor = [];
-    const glow = [];
-    const pulses = [];
-    const labels = [];
-    const hits = [];
-
-    defs.push(`
+    out.defs.push(`
       <linearGradient id="f-${u}" x1="0" y1="0" x2="1" y2="1">
         <stop offset="0" stop-color="${p.floorA}"/><stop offset="1" stop-color="${p.floorB}"/>
       </linearGradient>
@@ -277,22 +447,31 @@ class Renderer {
 
     c.rooms.forEach((r, i) => {
       if (r.points.length < 3) return;
-      const pts = r.points.map((q) => q.join(",")).join(" ");
-      defs.push(`<clipPath id="cp-${u}-${i}"><polygon points="${pts}"/></clipPath>`);
-      floor.push(`<polygon points="${pts}" fill="url(#f-${u})" stroke="${p.wall}" stroke-width="${c.wall_width || 24}" stroke-linejoin="miter"/>`);
+      const pts = r.points.map((v) => v.join(",")).join(" ");
+      out.defs.push(`<clipPath id="cp-${u}-${i}"><polygon points="${pts}"/></clipPath>`);
+      out.floor.push(`<polygon points="${pts}" fill="url(#f-${u})" stroke="${p.wall}" stroke-width="${this.is3d ? 2 : c.wall_width || 24}" stroke-linejoin="miter"/>`);
     });
 
-    // Openings: erase the wall between two rooms (e.g. an open kitchen).
-    const openings = c.openings
+    out.openings = c.openings
       .map((o) => {
         const [x1, y1, x2, y2] = o.line;
         const w = o.width || (c.wall_width || 24) + 2;
-        return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${p.opening}" stroke-width="${w}"/>` +
+        return (this.is3d ? "" : `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${p.opening}" stroke-width="${w}"/>`) +
           (o.dashed === false ? "" : `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${p.dash}" stroke-width="2" stroke-dasharray="8 8"/>`);
       })
       .join("");
 
-    // Glow: one radial gradient per light source, clipped to its room.
+    // Furniture: drawn on the floor in 2D; in 3D only the floor part (chairs) stays flat.
+    c.furniture.forEach((f) => {
+      const [w, h] = furnitureSize(f);
+      const t = furnitureTransform(f, w, h);
+      if (this.is3d) {
+        if (FURNITURE[f.type] && FURNITURE[f.type].chairs) out.furnitureFloor.push(`<g transform="${t}">${furnitureDrawing(f.type, w, h, q, "floor")}</g>`);
+      } else {
+        out.furniture.push(`<g transform="${t}">${furnitureDrawing(f.type, w, h, q)}</g>`);
+      }
+    });
+
     this.glowSources().forEach((g, gi) => {
       const [r, gg, b] = g.rgb;
       const col = `rgb(${r},${gg},${b})`;
@@ -301,41 +480,39 @@ class Renderer {
         const ri = c.rooms.indexOf(g.room);
         const bb = bbox(g.room.points);
         const rad = Math.max(bb.w, bb.h) * 0.85;
-        defs.push(`<radialGradient id="g-${u}-${gi}" gradientUnits="userSpaceOnUse" cx="${g.x}" cy="${g.y}" r="${rad}">
+        out.defs.push(`<radialGradient id="g-${u}-${gi}" gradientUnits="userSpaceOnUse" cx="${g.x}" cy="${g.y}" r="${rad}">
           <stop offset="0" stop-color="${col}" stop-opacity="${a.toFixed(3)}"/>
           <stop offset="0.55" stop-color="${col}" stop-opacity="${(a * 0.45).toFixed(3)}"/>
           <stop offset="1" stop-color="${col}" stop-opacity="${(a * 0.12).toFixed(3)}"/></radialGradient>`);
-        glow.push(`<rect class="glow" clip-path="url(#cp-${u}-${ri})" x="${bb.minX - 20}" y="${bb.minY - 20}" width="${bb.w + 40}" height="${bb.h + 40}" fill="url(#g-${u}-${gi})" style="mix-blend-mode:${this.mode() === "night" ? "screen" : "normal"}"/>`);
+        out.glow.push(`<rect class="glow" clip-path="url(#cp-${u}-${ri})" x="${bb.minX - 20}" y="${bb.minY - 20}" width="${bb.w + 40}" height="${bb.h + 40}" fill="url(#g-${u}-${gi})" style="mix-blend-mode:${this.mode() === "night" ? "screen" : "normal"}"/>`);
       } else {
         const rad = c.outdoor_glow_radius || 70;
-        defs.push(`<radialGradient id="g-${u}-${gi}" gradientUnits="userSpaceOnUse" cx="${g.x}" cy="${g.y}" r="${rad}">
+        out.defs.push(`<radialGradient id="g-${u}-${gi}" gradientUnits="userSpaceOnUse" cx="${g.x}" cy="${g.y}" r="${rad}">
           <stop offset="0" stop-color="${col}" stop-opacity="${(a * 0.9).toFixed(3)}"/>
           <stop offset="1" stop-color="${col}" stop-opacity="0"/></radialGradient>`);
-        glow.push(`<circle class="glow" cx="${g.x}" cy="${g.y}" r="${rad}" fill="url(#g-${u}-${gi})"/>`);
+        out.glow.push(`<circle class="glow" cx="${g.x}" cy="${g.y}" r="${rad}" fill="url(#g-${u}-${gi})"/>`);
       }
     });
 
-    // Motion: the whole room pulses while any of its motion sensors is on.
     c.rooms.forEach((r, i) => {
       if (r.points.length < 3) return;
       const moving = r.motion.some((id) => isOn(this.st(id)));
       if (moving || (this.edit && this.c.preview_motion)) {
-        const pts = r.points.map((q) => q.join(",")).join(" ");
+        const pts = r.points.map((v) => v.join(",")).join(" ");
         const col = c.motion_color || "#7fd3ff";
-        pulses.push(`<g class="pulse"><polygon points="${pts}" fill="${col}" fill-opacity="0.32" stroke="${col}" stroke-width="6" stroke-opacity="0.9" clip-path="url(#cp-${u}-${i})"/></g>`);
+        out.pulses.push(`<g class="pulse"><polygon points="${pts}" fill="${col}" fill-opacity="0.32" stroke="${col}" stroke-width="6" stroke-opacity="0.9" clip-path="url(#cp-${u}-${i})"/></g>`);
       }
       if (r.name && r.show_name !== false) {
         const bb = bbox(r.points);
         const [lx, ly] = r.label || [bb.cx, bb.cy];
-        labels.push(`<text x="${lx}" y="${ly}" font-family="Helvetica,Arial,sans-serif" font-size="${c.label_size || 28}" font-weight="600" fill="${p.text}" text-anchor="middle" dominant-baseline="middle">${esc(r.name)}</text>`);
+        out.labels.push({ x: lx, y: ly, text: r.name });
       }
       if (!this.edit && r.entity) {
-        const pts = r.points.map((q) => q.join(",")).join(" ");
-        hits.push(`<polygon class="room-hit" data-room="${i}" points="${pts}" fill="transparent"/>`);
+        const pts = r.points.map((v) => v.join(",")).join(" ");
+        out.hits.push(`<polygon class="room-hit" data-room="${i}" points="${pts}" fill="transparent"/>`);
       }
     });
 
-    // Robots: ring when busy, red ring on error.
     for (const d of c.devices) {
       const s = this.st(d.entity);
       if (!s) continue;
@@ -345,30 +522,234 @@ class Renderer {
       const err = ERROR_STATES.includes(s.state);
       if (!busy && !err) continue;
       const col = err ? c.error_color || "#ff3b30" : c.ring_color || "#34c759";
-      pulses.push(`<circle class="pulse" cx="${d.x}" cy="${d.y}" r="34" fill="${col}" fill-opacity="0.35"/>`);
-      pulses.push(`<circle class="ring" cx="${d.x}" cy="${d.y}" r="55" fill="none" stroke="${col}" stroke-width="5"/>`);
+      out.pulses.push(`<circle class="pulse" cx="${d.x}" cy="${d.y}" r="34" fill="${col}" fill-opacity="0.35"/>`);
+      out.pulses.push(`<circle class="ring" cx="${d.x}" cy="${d.y}" r="55" fill="none" stroke="${col}" stroke-width="5"/>`);
     }
 
-    const [doorBack, doorFront] = this.doorsSvg(p);
+    [out.doorBack, out.doorFront] = this.doorsSvg(p);
     if (!this.edit) {
       c.doors.forEach((d, i) => {
         if (!d.sensor) return;
         const [x1, y1, x2, y2] = d.line;
-        hits.push(`<circle class="room-hit" data-door="${i}" cx="${(x1 + x2) / 2}" cy="${(y1 + y2) / 2}" r="${Math.max(24, Math.hypot(x2 - x1, y2 - y1) / 2)}" fill="transparent"/>`);
+        out.hits.push(`<circle class="room-hit" data-door="${i}" cx="${(x1 + x2) / 2}" cy="${(y1 + y2) / 2}" r="${Math.max(24, Math.hypot(x2 - x1, y2 - y1) / 2)}" fill="transparent"/>`);
       });
     }
+    return out;
+  }
 
+  labelSvg(x, y, text, p) {
+    return `<text x="${x}" y="${y}" font-family="Helvetica,Arial,sans-serif" font-size="${this.c.label_size || 28}" font-weight="600" fill="${p.text}" text-anchor="middle" dominant-baseline="middle">${esc(text)}</text>`;
+  }
+
+  svg() {
+    if (this.is3d) return this.svg3d();
+    const [W, H] = this.c.size;
+    const P = this.parts();
+    const u = this.uid;
     return `<svg class="plan" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet">
-      <defs>${defs.join("")}</defs>
-      <g filter="url(#sh-${u})">${floor.join("")}</g>
-      ${openings}
-      ${doorBack}
-      <g>${glow.join("")}</g>
-      ${doorFront}
-      <g>${pulses.join("")}</g>
-      <g pointer-events="none">${labels.join("")}</g>
-      <g>${hits.join("")}</g>
+      <defs>${P.defs.join("")}</defs>
+      <g filter="url(#sh-${u})">${P.floor.join("")}</g>
+      ${P.openings}
+      ${P.doorBack}
+      <g pointer-events="none">${P.furniture.join("")}</g>
+      <g>${P.glow.join("")}</g>
+      ${P.doorFront}
+      <g>${P.pulses.join("")}</g>
+      <g pointer-events="none">${P.labels.map((l) => this.labelSvg(l.x, l.y, l.text, P.p)).join("")}</g>
+      <g>${P.hits.join("")}</g>
     </svg>`;
+  }
+
+  /* ---------- 3D (oblique "dollhouse" view) ---------- */
+
+  view3d() {
+    if (this._v3) return this._v3;
+    const o = this.c.view_3d || {};
+    const ang = ((o.angle ?? 30) * Math.PI) / 180;
+    const s = o.tilt ?? 0.58; // vertical squash of the floor
+    const k = Math.sqrt(Math.max(0.05, 1 - s * s)); // how much height shows
+    const cos = Math.cos(ang);
+    const sin = Math.sin(ang);
+    const wallH = o.wall_height ?? 70;
+    const proj = (x, y, z = 0) => [x * cos - y * sin, (x * sin + y * cos) * s - z * k];
+    const depth = (x, y) => x * sin + y * cos;
+    const matrix = (z = 0) => `matrix(${cos} ${sin * s} ${-sin} ${cos * s} 0 ${-z * k})`;
+    // Bounding box of everything that will be drawn.
+    const pts = [];
+    this.c.rooms.forEach((r) => r.points.forEach(([x, y]) => pts.push(proj(x, y, 0), proj(x, y, wallH))));
+    this.c.furniture.forEach((f) => {
+      const [w, h, spec] = furnitureSize(f);
+      furnitureCorners(f, w, h).forEach(([x, y]) => pts.push(proj(x, y, spec.z)));
+    });
+    this.c.devices.forEach((d) => pts.push(proj(d.x, d.y, 0)));
+    if (!pts.length) pts.push([0, 0], [this.c.size[0], this.c.size[1]]);
+    const m = 50;
+    const minX = Math.min(...pts.map((q) => q[0])) - m;
+    const minY = Math.min(...pts.map((q) => q[1])) - m;
+    const maxX = Math.max(...pts.map((q) => q[0])) + m;
+    const maxY = Math.max(...pts.map((q) => q[1])) + m;
+    this._v3 = { proj, depth, matrix, wallH, sin, cos, vb: [minX, minY, maxX - minX, maxY - minY] };
+    return this._v3;
+  }
+
+  /** Wall pieces along every room edge, with openings and doors cut out and windows marked. */
+  wallSegments() {
+    const cut = [
+      ...this.c.openings.map((o) => ({ line: o.line, kind: "gap" })),
+      ...this.c.doors.map((d) => ({ line: d.line, kind: d.type === "window" ? "glass" : "gap" })),
+    ];
+    const segs = [];
+    for (const r of this.c.rooms) {
+      const P = r.points;
+      for (let i = 0; i < P.length; i++) {
+        const [ax, ay] = P[i];
+        const [bx, by] = P[(i + 1) % P.length];
+        const dx = bx - ax;
+        const dy = by - ay;
+        const L = Math.hypot(dx, dy);
+        if (L < 1) continue;
+        const marks = [];
+        for (const c of cut) {
+          const [x1, y1, x2, y2] = c.line;
+          const dist = (x, y) => Math.abs((x - ax) * dy - (y - ay) * dx) / L;
+          if (dist(x1, y1) > 6 || dist(x2, y2) > 6) continue;
+          let t1 = ((x1 - ax) * dx + (y1 - ay) * dy) / (L * L);
+          let t2 = ((x2 - ax) * dx + (y2 - ay) * dy) / (L * L);
+          if (t1 > t2) [t1, t2] = [t2, t1];
+          t1 = Math.max(0, t1);
+          t2 = Math.min(1, t2);
+          if (t2 - t1 > 0.001) marks.push({ t1, t2, kind: c.kind });
+        }
+        marks.sort((a, b) => a.t1 - b.t1);
+        let t = 0;
+        const push = (t1, t2, kind) =>
+          t2 - t1 > 0.001 && segs.push({ a: [ax + dx * t1, ay + dy * t1], b: [ax + dx * t2, ay + dy * t2], kind });
+        for (const mk of marks) {
+          if (mk.t1 > t) push(t, mk.t1, "wall");
+          if (mk.kind === "glass") push(Math.max(t, mk.t1), mk.t2, "glass");
+          t = Math.max(t, mk.t2);
+        }
+        push(t, 1, "wall");
+      }
+    }
+    return segs;
+  }
+
+  /** A box (prism) from a 2D footprint, between z0 and z1; returns visible faces. */
+  prism(corners, z0, z1, colors, opts = {}) {
+    const v = this.view3d();
+    const faces = [];
+    const n = corners.length;
+    // Signed area tells the winding so outward normals point the right way.
+    let area = 0;
+    for (let i = 0; i < n; i++) {
+      const [x1, y1] = corners[i];
+      const [x2, y2] = corners[(i + 1) % n];
+      area += x1 * y2 - x2 * y1;
+    }
+    const sgn = area > 0 ? 1 : -1;
+    for (let i = 0; i < n; i++) {
+      const [x1, y1] = corners[i];
+      const [x2, y2] = corners[(i + 1) % n];
+      const nx = (y2 - y1) * sgn;
+      const ny = -(x2 - x1) * sgn;
+      const facing = nx * v.sin + ny * v.cos; // towards the viewer when > 0
+      if (facing <= 0) continue;
+      const lit = nx * v.cos - ny * v.sin < 0; // left-facing sides catch the light
+      const q = [v.proj(x1, y1, z0), v.proj(x2, y2, z0), v.proj(x2, y2, z1), v.proj(x1, y1, z1)];
+      faces.push(`<polygon points="${q.map((c) => c.map((n2) => n2.toFixed(1)).join(",")).join(" ")}" fill="${lit ? colors.side : colors.side2}" ${opts.sideExtra || ""} stroke="${colors.edge || "none"}" stroke-width="1"/>`);
+    }
+    if (!opts.noTop) {
+      const top = corners.map(([x, y]) => v.proj(x, y, z1));
+      faces.push(`<polygon points="${top.map((c) => c.map((n2) => n2.toFixed(1)).join(",")).join(" ")}" fill="${colors.top}" ${opts.topExtra || ""} stroke="${colors.edge || "none"}" stroke-width="1"/>`);
+    }
+    return faces.join("");
+  }
+
+  svg3d() {
+    const v = this.view3d();
+    const P = this.parts();
+    const u = this.uid;
+    const night = this.mode() === "night";
+    const wallCol = night
+      ? { top: "#8a93a8", side: "#5d667b", side2: "#4e566a", edge: "#3f475a" }
+      : { top: "#ffffff", side: "#dfe4ee", side2: "#c9d0de", edge: "#b8c0cf" };
+    const glassCol = { top: night ? "#9fc8ea" : "#cfe6f8", side: night ? "#5a8fbf" : "#9cc9ee", side2: night ? "#4d7fac" : "#86b9e3", edge: "none" };
+    const t = (this.c.wall_width || 24) * 0.55;
+    const items = [];
+
+    for (const s of this.wallSegments()) {
+      if (s.kind === "gap") continue;
+      const [ax, ay] = s.a;
+      const [bx, by] = s.b;
+      const L = Math.hypot(bx - ax, by - ay);
+      const nx = (-(by - ay) / L) * (t / 2);
+      const ny = ((bx - ax) / L) * (t / 2);
+      const foot = [[ax + nx, ay + ny], [bx + nx, by + ny], [bx - nx, by - ny], [ax - nx, ay - ny]];
+      let svg;
+      if (s.kind === "glass") {
+        const sill = v.wallH * 0.32;
+        svg = this.prism(foot, 0, sill, wallCol) + this.prism(foot, sill, v.wallH, glassCol, { sideExtra: 'fill-opacity="0.45"', topExtra: 'fill-opacity="0.6"' });
+      } else svg = this.prism(foot, 0, v.wallH, wallCol);
+      items.push({ d: v.depth((ax + bx) / 2, (ay + by) / 2), svg });
+    }
+
+    const q = P.q;
+    const furnCol = { top: q.fur, side: q.side, side2: q.side2, edge: q.line };
+    this.c.furniture.forEach((f) => {
+      const [w, h, spec] = furnitureSize(f);
+      const z = spec.z;
+      let corners = furnitureCorners(f, w, h);
+      if (spec.chairs) {
+        const c = 18;
+        corners = furnitureCorners({ ...f, x: f.x + c, y: f.y + c }, w - 2 * c, h - 2 * c);
+      }
+      const body = this.prism(corners, 0, z, furnCol, { noTop: true });
+      const top = `<g transform="${v.matrix(z)}"><g transform="${furnitureTransform(f, w, h)}">${furnitureDrawing(f.type, w, h, q, "top")}</g></g>`;
+      const [cx, cy] = [f.x + w / 2, f.y + h / 2];
+      items.push({ d: v.depth(cx, cy), svg: body + top });
+    });
+
+    items.sort((a, b) => a.d - b.d);
+    const [vx, vy, vw, vh] = v.vb;
+    const labels = P.labels
+      .map((l) => {
+        const [x, y] = v.proj(l.x, l.y, 0);
+        return this.labelSvg(x, y, l.text, P.p);
+      })
+      .join("");
+    return `<svg class="plan" viewBox="${vx} ${vy} ${vw} ${vh}" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet">
+      <defs>${P.defs.join("")}</defs>
+      <g transform="${v.matrix(0)}">
+        <g filter="url(#sh-${u})">${P.floor.join("")}</g>
+        ${P.openings}
+        ${P.doorBack}
+        <g pointer-events="none">${P.furnitureFloor.join("")}</g>
+        <g>${P.glow.join("")}</g>
+        ${P.doorFront}
+        <g>${P.pulses.join("")}</g>
+        <g>${P.hits.join("")}</g>
+      </g>
+      <g pointer-events="none">${items.map((i) => i.svg).join("")}</g>
+      <g pointer-events="none" style="paint-order:stroke" stroke="${night ? "rgba(20,24,34,.55)" : "rgba(255,255,255,.75)"}" stroke-width="5">${labels}</g>
+    </svg>`;
+  }
+
+  /** Aspect ratio and position mapping for the HTML icon layer. */
+  frame() {
+    if (!this.is3d) {
+      const [W, H] = this.c.size;
+      return { ratio: `${W}/${H}`, pos: (x, y) => [(x / W) * 100, (y / H) * 100] };
+    }
+    const v = this.view3d();
+    const [vx, vy, vw, vh] = v.vb;
+    return {
+      ratio: `${vw.toFixed(1)}/${vh.toFixed(1)}`,
+      pos: (x, y) => {
+        const [px, py] = v.proj(x, y, 0);
+        return [((px - vx) / vw) * 100, ((py - vy) / vh) * 100];
+      },
+    };
   }
 
   /**
@@ -459,12 +840,13 @@ class Renderer {
   }
 
   devicesHtml() {
-    const [W, H] = this.c.size;
+    const fr = this.frame();
     return this.c.devices
       .map((d, i) => {
         const s = this.st(d.entity);
-        const left = ((d.x / W) * 100).toFixed(3);
-        const top = ((d.y / H) * 100).toFixed(3);
+        const [lx, ty] = fr.pos(d.x, d.y);
+        const left = lx.toFixed(3);
+        const top = ty.toFixed(3);
         const una = !s || s.state === "unavailable" ? " unavailable" : "";
         if (d.type === "label") {
           let txt = "–";
@@ -637,22 +1019,56 @@ class GlowFloorplanCard extends HTMLElement {
     return { columns: "full", min_columns: 6 };
   }
 
+  _viewKey() {
+    return `glow-floorplan-view:${location.pathname}`;
+  }
+
+  _currentView() {
+    if (this._view) return this._view;
+    let saved = null;
+    try {
+      saved = window.localStorage.getItem(this._viewKey());
+    } catch (e) {
+      /* storage can be unavailable */
+    }
+    this._view = saved || (this._config.view === "3d" ? "3d" : "2d");
+    return this._view;
+  }
+
+  _toggleView() {
+    this._view = this._currentView() === "3d" ? "2d" : "3d";
+    try {
+      window.localStorage.setItem(this._viewKey(), this._view);
+    } catch (e) {
+      /* ignore */
+    }
+    this._render(true);
+  }
+
   _render(force) {
     if (!this._config || !this._hass) return;
-    const r = new Renderer(this._config, this._hass, { uid: this._uid });
-    const sig = r.signature();
+    const view = this._config.view_toggle === false ? (this._config.view === "3d" ? "3d" : "2d") : this._currentView();
+    const r = new Renderer(this._config, this._hass, { uid: this._uid, is3d: view === "3d" });
+    const sig = r.signature() + view;
     if (!force && sig === this._sig) return;
     this._sig = sig;
-    const [W, H] = this._config.size;
+    const fr = r.frame();
     const err = this._layoutError ? `<div class="warn">${esc(this._layoutError)}</div>` : "";
     const title = this._config.title ? `<h1 class="card-header">${esc(this._config.title)}</h1>` : "";
+    const toggle = this._config.view_toggle === false ? "" :
+      `<button class="viewbtn" title="Skift mellem 2D og 3D"><span class="${view === "2d" ? "on" : ""}">2D</span><span class="${view === "3d" ? "on" : ""}">3D</span></button>`;
     this.shadowRoot.innerHTML = `<style>${STYLES}</style>
       <ha-card>${title}${err}
-        <div class="wrap" style="aspect-ratio:${W}/${H}">
-          ${r.svg()}
-          <div class="layer">${r.devicesHtml()}</div>
+        <div class="outer">
+          ${toggle}
+          <div class="wrap" style="aspect-ratio:${fr.ratio}">
+            ${r.svg()}
+            <div class="layer">${r.devicesHtml()}</div>
+          </div>
         </div>
       </ha-card>`;
+    const btn = this.shadowRoot.querySelector(".viewbtn");
+    if (btn) btn.addEventListener("click", () => this._toggleView());
     this._bind();
   }
 
@@ -747,6 +1163,10 @@ const EDITOR_STYLES = `
   .handle.label { fill: var(--primary-color, #03a9f4); }
   .handle.mid { fill: var(--primary-color, #03a9f4); stroke: #fff; }
   .handle.hinge { fill: #ff9f0a; stroke: #fff; }
+  .furn-hit { fill: transparent; cursor: move; }
+  .furn-sel { fill: rgba(3,169,244,0.08); stroke: var(--primary-color, #03a9f4); stroke-width: 3; stroke-dasharray: 8 5; pointer-events: none; }
+  .bar select { font: inherit; font-size: 13px; border: 1px solid var(--divider-color, #ccc); border-radius: 8px; padding: 6px 8px;
+    background: var(--card-background-color, #fff); color: var(--primary-text-color); }
   .room-outline { fill: none; stroke: var(--primary-color, #03a9f4); stroke-width: 3; stroke-dasharray: 10 6; pointer-events: none; }
   .room-pick { fill: transparent; cursor: pointer; }
   .room-pick.sel { fill: rgba(3,169,244,0.06); cursor: move; }
@@ -771,6 +1191,7 @@ const HINTS = {
   devices: "Træk ikonerne på plads. Klik på et ikon for at ændre det. En lampe lyser det rum op, den står i.",
   rooms: "Klik på et rum og træk det for at flytte det (ikonerne i rummet følger med). Træk i hjørnerne – de snapper vandret og lodret. Den blå prik flytter navnet. Hold Alt for at flytte frit.",
   openings: "En åbning fjerner væggen mellem to rum. Træk i enderne – de snapper til væggene og til 90°. Den udfyldte prik i midten flytter hele åbningen. Hold Alt for at flytte frit.",
+  furniture: "Vælg et møbel i listen for at tilføje det. Træk det på plads – det snapper til væggene. Træk i den blå prik for at ændre størrelsen, og drej det i panelet. Hold Alt for at flytte frit.",
   doors: "Tegn døre og vinduer i væggene. Træk i enderne (de snapper til væggene) – den første ende er hængslet. Vælg en sensor, så vises døren åben, når sensoren melder åben.",
 };
 
@@ -805,6 +1226,7 @@ class GlowFloorplanCardEditor extends HTMLElement {
     });
     if (!out.openings.length) delete out.openings;
     if (!out.doors.length) delete out.doors;
+    if (!out.furniture.length) delete out.furniture;
     out.type = (this._raw && this._raw.type) || `custom:${CARD_TAG}`;
     fireEvent(this, "config-changed", { config: out });
   }
@@ -836,6 +1258,7 @@ class GlowFloorplanCardEditor extends HTMLElement {
       rooms: `<button data-act="add-room">+ Rum</button>`,
       openings: `<button data-act="add-op">+ Åbning</button>`,
       doors: `<button data-act="add-door">+ Dør</button><button data-act="add-window">+ Vindue</button>`,
+      furniture: `<select class="addfurn"><option value="">+ Møbel …</option>${Object.entries(FURNITURE).map(([k, v]) => `<option value="${k}">${v.name}</option>`).join("")}</select>`,
     }[m];
     this.shadowRoot.innerHTML = `<style>${EDITOR_STYLES}</style>
       <div class="ed">
@@ -845,6 +1268,7 @@ class GlowFloorplanCardEditor extends HTMLElement {
             <button data-mode="rooms" class="${m === "rooms" ? "on" : ""}">Rum</button>
             <button data-mode="openings" class="${m === "openings" ? "on" : ""}">Åbninger</button>
             <button data-mode="doors" class="${m === "doors" ? "on" : ""}">Døre &amp; vinduer</button>
+            <button data-mode="furniture" class="${m === "furniture" ? "on" : ""}">Møbler</button>
           </div>
           <span style="flex:1"></span>${add}
         </div>
@@ -874,6 +1298,8 @@ class GlowFloorplanCardEditor extends HTMLElement {
       })
     );
     root.querySelectorAll(".bar [data-act]").forEach((b) => b.addEventListener("click", () => this._action(b.dataset.act)));
+    const addf = root.querySelector(".addfurn");
+    if (addf) addf.addEventListener("change", () => addf.value && this._addFurniture(addf.value));
     root.querySelectorAll("[data-g]").forEach((inp) => inp.addEventListener("change", () => this._globalField(inp.dataset.g, inp)));
     this._wirePanel();
     this._renderStage();
@@ -936,6 +1362,7 @@ class GlowFloorplanCardEditor extends HTMLElement {
     root.querySelectorAll("[data-r]").forEach((inp) => inp.addEventListener("change", () => this._roomField(inp.dataset.r, inp)));
     root.querySelectorAll("[data-o]").forEach((inp) => inp.addEventListener("change", () => this._opField(inp.dataset.o, inp)));
     root.querySelectorAll("[data-w]").forEach((inp) => inp.addEventListener("change", () => this._doorField(inp.dataset.w, inp)));
+    root.querySelectorAll("[data-f]").forEach((inp) => inp.addEventListener("change", () => this._furnField(inp.dataset.f, inp)));
   }
 
   _overlay() {
@@ -974,6 +1401,15 @@ class GlowFloorplanCardEditor extends HTMLElement {
           out += `<circle class="handle" data-coll="${coll}" data-op="${i}" data-end="1" cx="${x2}" cy="${y2}" r="13"/>`;
           out += `<circle class="handle mid" data-coll="${coll}" data-op="${i}" data-end="mid" cx="${(x1 + x2) / 2}" cy="${(y1 + y2) / 2}" r="11"/>`;
         }
+      });
+    }
+    if (this._mode === "furniture") {
+      c.furniture.forEach((f, i) => {
+        const [w, h] = furnitureSize(f);
+        const sel = s && s.kind === "furn" && s.i === i;
+        out += `<g transform="${furnitureTransform(f, w, h)}"><rect class="furn-hit" data-furn="${i}" x="0" y="0" width="${w}" height="${h}"/>`;
+        if (sel) out += `<rect class="furn-sel" x="-3" y="-3" width="${w + 6}" height="${h + 6}" rx="4"/><circle class="handle" data-furn-resize="${i}" cx="${w}" cy="${h}" r="12"/>`;
+        out += `</g>`;
       });
     }
     const g = (this._guides || [])
@@ -1165,7 +1601,10 @@ class GlowFloorplanCardEditor extends HTMLElement {
               r.d.y = r.y + dy;
             });
           },
-          onEnd: () => (this._sel = { kind: "room", i }),
+          onEnd: () => {
+            this._sel = { kind: "room", i };
+            this._lastRoom = i;
+          },
         });
       });
     });
@@ -1199,6 +1638,53 @@ class GlowFloorplanCardEditor extends HTMLElement {
             this._lastVertex = vi;
           },
           onEnd: () => {},
+        });
+      });
+    });
+
+    // Furniture: move (snapping to walls) and resize from the bottom-right corner.
+    stage.querySelectorAll(".furn-hit").forEach((el) => {
+      const i = Number(el.dataset.furn);
+      el.addEventListener("pointerdown", (ev) => {
+        const f = c.furniture[i];
+        const [sx, sy] = [f.x, f.y];
+        const [px, py] = this._toUnits(ev, false);
+        this._startDrag(ev, {
+          onMove: (e) => {
+            const [x, y] = this._toUnits(e, false);
+            const g = c.snap || 5;
+            f.x = Math.round((sx + x - px) / g) * g;
+            f.y = Math.round((sy + y - py) / g) * g;
+            this._guides = [];
+            if (!e.altKey) this._snapFurniture(f);
+          },
+          onEnd: () => (this._sel = { kind: "furn", i }),
+        });
+      });
+    });
+    stage.querySelectorAll("[data-furn-resize]").forEach((el) => {
+      const i = Number(el.dataset.furnResize);
+      el.addEventListener("pointerdown", (ev) => {
+        const f = c.furniture[i];
+        const [w0, h0] = furnitureSize(f);
+        const [ox, oy] = furnitureCorners(f, w0, h0)[0];
+        const a = ((Number(f.rotation) || 0) * Math.PI) / 180;
+        this._startDrag(ev, {
+          onMove: (e) => {
+            const [x, y] = this._toUnits(e, false);
+            const g = c.snap || 5;
+            const lx = (x - ox) * Math.cos(a) + (y - oy) * Math.sin(a);
+            const ly = -(x - ox) * Math.sin(a) + (y - oy) * Math.cos(a);
+            const w = Math.max(15, Math.round(lx / g) * g);
+            const h = Math.max(15, Math.round(ly / g) * g);
+            const cx = ox + (w / 2) * Math.cos(a) - (h / 2) * Math.sin(a);
+            const cy = oy + (w / 2) * Math.sin(a) + (h / 2) * Math.cos(a);
+            f.w = w;
+            f.h = h;
+            f.x = Math.round(cx - w / 2);
+            f.y = Math.round(cy - h / 2);
+          },
+          onEnd: () => (this._sel = { kind: "furn", i }),
         });
       });
     });
@@ -1270,6 +1756,92 @@ class GlowFloorplanCardEditor extends HTMLElement {
     });
   }
 
+  /** Push a piece of furniture against the nearest inner wall face (axis aligned). */
+  _snapFurniture(f) {
+    const [w, h] = furnitureSize(f);
+    const pts = furnitureCorners(f, w, h);
+    const minX = Math.min(...pts.map((p) => p[0]));
+    const maxX = Math.max(...pts.map((p) => p[0]));
+    const minY = Math.min(...pts.map((p) => p[1]));
+    const maxY = Math.max(...pts.map((p) => p[1]));
+    const half = (this._config.wall_width || 24) / 2;
+    const tol = this._tol() * 1.5;
+    let bx = null;
+    let by = null;
+    for (const r of this._config.rooms) {
+      const P = r.points;
+      for (let i = 0; i < P.length; i++) {
+        const [ax, ay] = P[i];
+        const [cx, cy] = P[(i + 1) % P.length];
+        if (Math.abs(ax - cx) < 1) {
+          // vertical wall: only if the piece overlaps it vertically
+          if (maxY < Math.min(ay, cy) || minY > Math.max(ay, cy)) continue;
+          for (const face of [ax - half, ax + half])
+            for (const edge of [minX, maxX]) {
+              const d = face - edge;
+              if (Math.abs(d) <= tol && (!bx || Math.abs(d) < Math.abs(bx.d))) bx = { d, x: face, y1: Math.min(ay, cy), y2: Math.max(ay, cy) };
+            }
+        } else if (Math.abs(ay - cy) < 1) {
+          if (maxX < Math.min(ax, cx) || minX > Math.max(ax, cx)) continue;
+          for (const face of [ay - half, ay + half])
+            for (const edge of [minY, maxY]) {
+              const d = face - edge;
+              if (Math.abs(d) <= tol && (!by || Math.abs(d) < Math.abs(by.d))) by = { d, y: face, x1: Math.min(ax, cx), x2: Math.max(ax, cx) };
+            }
+        }
+      }
+    }
+    if (bx) {
+      f.x += bx.d;
+      this._guides.push([bx.x, bx.y1, bx.x, bx.y2]);
+    }
+    if (by) {
+      f.y += by.d;
+      this._guides.push([by.x1, by.y, by.x2, by.y]);
+    }
+  }
+
+  _addFurniture(type) {
+    const c = this._config;
+    const spec = FURNITURE[type];
+    // Drop it in the middle of the selected room, the first room, or the plan.
+    const [W, H] = c.size;
+    let cx = W / 2;
+    let cy = H / 2;
+    const room = (this._lastRoom !== undefined && c.rooms[this._lastRoom]) || c.rooms[0];
+    if (room && room.points.length > 2) {
+      const bb = bbox(room.points);
+      cx = bb.cx;
+      cy = bb.cy;
+    }
+    c.furniture.push({ type, x: Math.round(cx - spec.w / 2), y: Math.round(cy - spec.h / 2) });
+    this._sel = { kind: "furn", i: c.furniture.length - 1 };
+    this._emit();
+    this._render();
+  }
+
+  _furnField(key, inp) {
+    const f = this._config.furniture[this._sel.i];
+    const [w, h] = furnitureSize(f);
+    const cx = f.x + w / 2;
+    const cy = f.y + h / 2;
+    if (key === "type") {
+      f.type = inp.value;
+      delete f.w;
+      delete f.h;
+    }
+    if (key === "w") inp.value ? (f.w = Math.max(10, Number(inp.value))) : delete f.w;
+    if (key === "h") inp.value ? (f.h = Math.max(10, Number(inp.value))) : delete f.h;
+    if (key === "rotation") Number(inp.value) ? (f.rotation = Number(inp.value)) : delete f.rotation;
+    // Keep the centre in place when the size changes.
+    const [nw, nh] = furnitureSize(f);
+    f.x = Math.round(cx - nw / 2);
+    f.y = Math.round(cy - nh / 2);
+    this._emit();
+    this._renderStage();
+    if (key === "type") this._renderPanel();
+  }
+
   /** Window-level drag so the stage can be re-rendered live while dragging. */
   _startDrag(ev, { onMove, onEnd }) {
     if (ev.button !== undefined && ev.button !== 0) return;
@@ -1327,6 +1899,25 @@ class GlowFloorplanCardEditor extends HTMLElement {
         </select>`}
         <label>Position</label><div class="grid2"><input data-d="x" type="number" value="${Math.round(d.x)}"><input data-d="y" type="number" value="${Math.round(d.y)}"></div>
         <div class="row"><button class="danger" data-act="del-dev">Slet</button><button data-act="dup-dev">Kopiér</button><button data-act="deselect">Luk</button></div>
+      </div>`;
+    }
+    if (s.kind === "furn") {
+      const f = this._config.furniture[s.i];
+      if (!f) return "";
+      const [w, h] = furnitureSize(f);
+      const rot = ((Number(f.rotation) || 0) % 360 + 360) % 360;
+      return `<div class="panel">
+        <h3>Møbel</h3>
+        <label>Type</label><select data-f="type">${Object.entries(FURNITURE).map(([k, v]) => `<option value="${k}" ${f.type === k ? "selected" : ""}>${v.name}</option>`).join("")}</select>
+        <label>Størrelse</label><div class="grid2"><input data-f="w" type="number" title="Bredde" value="${w}"><input data-f="h" type="number" title="Dybde" value="${h}"></div>
+        <label>Drejning</label><select data-f="rotation">${[0, 90, 180, 270].map((r) => `<option value="${r}" ${rot === r ? "selected" : ""}>${r}°</option>`).join("")}${[0, 90, 180, 270].includes(rot) ? "" : `<option value="${rot}" selected>${rot}°</option>`}</select>
+        <div class="row">
+          <button data-act="rot-left">↺ 90°</button>
+          <button data-act="rot-right">↻ 90°</button>
+          <button data-act="dup-furn">Kopiér</button>
+          <button class="danger" data-act="del-furn">Slet</button>
+          <button data-act="deselect">Luk</button>
+        </div>
       </div>`;
     }
     if (s.kind === "door") {
@@ -1523,6 +2114,22 @@ class GlowFloorplanCardEditor extends HTMLElement {
       }
       c.doors.push(win ? { type: "window", line } : { type: "door", line });
       this._sel = { kind: "door", i: c.doors.length - 1 };
+    }
+    if ((act === "rot-left" || act === "rot-right") && this._sel && this._sel.kind === "furn") {
+      const f = c.furniture[this._sel.i];
+      const r = ((((Number(f.rotation) || 0) + (act === "rot-right" ? 90 : -90)) % 360) + 360) % 360;
+      r ? (f.rotation = r) : delete f.rotation;
+    }
+    if (act === "dup-furn" && this._sel) {
+      const f = clone(c.furniture[this._sel.i]);
+      f.x += 30;
+      f.y += 30;
+      c.furniture.push(f);
+      this._sel = { kind: "furn", i: c.furniture.length - 1 };
+    }
+    if (act === "del-furn" && this._sel) {
+      c.furniture.splice(this._sel.i, 1);
+      this._sel = null;
     }
     if (act === "del-door" && this._sel) {
       c.doors.splice(this._sel.i, 1);

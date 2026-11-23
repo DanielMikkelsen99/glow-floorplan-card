@@ -75,6 +75,7 @@ The editor has three tabs:
 - **Enheder (Devices):** drag icons; click to edit.
 - **Rum (Rooms):** drag a whole room (the icons inside move with it) or its corners. Corners snap horizontally and vertically to their neighbours and to other rooms, with guide lines. Hold **Alt** to move freely.
 - **Åbninger (Openings):** drag the ends of an opening (they snap to walls and to 90°) or the dot in the middle to move it.
+- **Møbler (Furniture):** pick a piece from the list, drag it into place (it snaps against walls), resize from the blue dot and rotate in 90° steps.
 - **Døre & vinduer (Doors & windows):** draw doors and windows in the walls. The orange end is the hinge. Flip the hinge or the swing side with one click, choose one or two leaves, and link a sensor.
 
 ### Rooms
@@ -119,6 +120,33 @@ doors:
 ```
 
 Without a sensor a door is drawn closed with a dashed arc that shows how it opens. With a sensor the leaf swings open (in orange) while the sensor reports open; tapping it opens the sensor's details.
+
+### Furniture
+
+```yaml
+furniture:
+  - type: double_bed     # single_bed, double_bed, sofa_2, sofa_3, sofa_corner, armchair,
+    x: 362               # dining_table, coffee_table, dresser, cabinet, toilet, shower,
+    y: 125               # kitchen_counter
+    w: 150               # optional, defaults per type
+    h: 165
+    rotation: 90         # degrees, about the centre
+```
+
+Furniture is static: it is drawn like an architect's plan in 2D and as blocks in 3D.
+
+### 3D view
+
+A **2D / 3D** switch sits in the corner of the card; the choice is remembered per browser. The 3D view shows the home from above at an angle, like a dollhouse in a game: low walls with doors and windows cut out, furniture as blocks, and the floors still glowing in the colour of the lamps.
+
+```yaml
+view: 3d                 # default view (2d if omitted)
+view_toggle: true        # false hides the switch
+view_3d:
+  angle: 30              # rotation in degrees
+  tilt: 0.58             # 0.3 (steep side view) … 0.9 (almost from above)
+  wall_height: 70
+```
 
 ### Robots
 
