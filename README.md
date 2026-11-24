@@ -87,7 +87,7 @@ The editor has three tabs:
 | `name` | Name shown in the room |
 | `points` | Polygon corners `[x, y]` in canvas units |
 | `label` | Position of the name (defaults to the centre) |
-| `show_name` | `false` hides the name |
+| `show_name` | `false` hides the name (or `show_names: false` on the card hides all) |
 | `motion` | Motion sensors; the room pulses while one is on |
 | `lights` | Extra lights that glow from the room centre (lamps placed as devices are picked up automatically) |
 | `entity`, `tap_action`, `hold_action` | Make the room itself tappable |
@@ -180,7 +180,16 @@ type: custom:glow-floorplan-card
 layout_from: dashboard-home   # url path of the dashboard that holds the plan
 ```
 
-The card reads the first Glow Floorplan Card on that dashboard. Edit the plan there; every copy follows.
+The card reads the first Glow Floorplan Card on that dashboard that does not itself use `layout_from`. Edit the plan there; every copy follows.
+
+Card-level settings written next to `layout_from` override the shared plan for that copy only, for example a small version on a front page without room names:
+
+```yaml
+type: custom:glow-floorplan-card
+layout_from: dashboard-home
+show_names: false   # hide every room name in this copy
+view: 2d
+```
 
 ## Development
 

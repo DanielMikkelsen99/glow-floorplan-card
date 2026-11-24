@@ -10,7 +10,7 @@
  * License: MIT
  */
 
-const VERSION = "1.4.3";
+const VERSION = "1.4.4";
 const CARD_TAG = "glow-floorplan-card";
 const EDITOR_TAG = "glow-floorplan-card-editor";
 
@@ -613,7 +613,7 @@ class Renderer {
         const col = c.motion_color || "#7fd3ff";
         out.pulses.push(`<g class="pulse"><polygon points="${pts}" fill="${col}" fill-opacity="0.32" stroke="${col}" stroke-width="6" stroke-opacity="0.9" clip-path="url(#cp-${u}-${i})"/></g>`);
       }
-      if (r.name && r.show_name !== false) {
+      if (r.name && r.show_name !== false && c.show_names !== false) {
         const bb = bbox(r.points);
         const [lx, ly] = r.label || [bb.cx, bb.cy];
         out.labels.push({ x: lx, y: ly, text: r.name });
