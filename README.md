@@ -72,6 +72,8 @@ devices:
 
 ### Editor
 
+<img src="https://raw.githubusercontent.com/DanielMikkelsen99/glow-floorplan-card/main/images/editor.png" alt="The editor with a door selected: turn 90°, flip hinge or swing, change it to an opening" width="420">
+
 The editor has five tabs:
 
 - **Enheder (Devices):** drag icons; click to edit.
@@ -147,6 +149,8 @@ For `stairs_down` the top step is at the back of the piece (y = 0 before rotatio
 Furniture is static: it is drawn like an architect's plan in 2D and as blocks in 3D.
 
 ### Depth and shadows
+
+![3D close-up: soft shadows, darker floor along the walls and stairs going down](https://raw.githubusercontent.com/DanielMikkelsen99/glow-floorplan-card/main/images/depth.png)
 
 Floors darken softly towards the walls (ambient occlusion), and walls and furniture cast soft shadows on the floor, so the plan reads as a model rather than a flat drawing. In 3D the sides of walls and furniture also get lighter at the top and darker towards the floor. Light comes from the upper left. Turn it all off with:
 
