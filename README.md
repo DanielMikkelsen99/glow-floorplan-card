@@ -72,13 +72,15 @@ devices:
 
 ### Editor
 
-The editor has three tabs:
+The editor has five tabs:
 
 - **Enheder (Devices):** drag icons; click to edit.
 - **Rum (Rooms):** drag a whole room (the icons inside move with it) or its corners. Corners snap horizontally and vertically to their neighbours and to other rooms, with guide lines. Hold **Alt** to move freely.
 - **Åbninger (Openings):** drag the ends of an opening (they snap to walls and to 90°) or the dot in the middle to move it.
 - **Møbler (Furniture):** pick a piece from the list, drag it into place (it snaps against walls), resize from the blue dot and rotate in 90° steps.
-- **Døre & vinduer (Doors & windows):** draw doors and windows in the walls. The orange end is the hinge. Flip the hinge or the swing side with one click, choose one or two leaves, and link a sensor.
+- **Døre & vinduer (Doors & windows):** draw doors and windows in the walls. The orange end is the hinge. Flip the hinge or the swing side with one click, choose one or two leaves, and link a sensor. **↻ Drej 90°** turns a door, window or opening a quarter turn about its middle. Set the type to **Åbning (uden dør)** to turn a door into a plain gap in the wall, and use **Gør til dør** on an opening to go back.
+
+**Copy and paste:** on a computer, select anything on the plan (a device, room, opening, door, window or piece of furniture) and press **Ctrl+C**, then **Ctrl+V** to paste a copy next to it (**⌘C / ⌘V** on a Mac). Paste again for more copies, each a step further on. You can also switch floor before pasting. Copy and paste inside text fields work as usual.
 
 ### Rooms
 

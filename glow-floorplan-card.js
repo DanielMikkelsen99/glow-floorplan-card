@@ -1757,6 +1757,60 @@ class GlowFloorplanCardEditor extends HTMLElement {
     this._raf = 0;
   }
 
+  connectedCallback() {
+    this._onKey = (e) => this._key(e);
+    window.addEventListener("keydown", this._onKey);
+  }
+
+  disconnectedCallback() {
+    window.removeEventListener("keydown", this._onKey);
+  }
+
+  /** Ctrl/Cmd+C copies the selected item, Ctrl/Cmd+V pastes a copy next to it (also on another floor). */
+  _key(e) {
+    if (!(e.ctrlKey || e.metaKey) || e.altKey || !this.isConnected || !this._config) return;
+    const k = e.key.toLowerCase();
+    if (k !== "c" && k !== "v") return;
+    // Leave normal copy and paste alone while typing in a field or with text selected.
+    const t = e.composedPath()[0];
+    if (t && (["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName) || t.isContentEditable)) return;
+    if (k === "c" && String(window.getSelection && window.getSelection()).trim()) return;
+    const COLL = { dev: "devices", room: "rooms", op: "openings", door: "doors", furn: "furniture" };
+    if (k === "c") {
+      const s = this._sel;
+      if (!s || !COLL[s.kind]) return;
+      const item = this._config[COLL[s.kind]][s.i];
+      if (!item) return;
+      GlowFloorplanCardEditor._clip = { kind: s.kind, mode: this._mode, item: clone(item) };
+      e.preventDefault();
+      return;
+    }
+    const clip = GlowFloorplanCardEditor._clip;
+    if (!clip) return;
+    e.preventDefault();
+    const it = clone(clip.item);
+    const off = 30;
+    if (clip.kind === "room") {
+      it.points = it.points.map(([x, y]) => [x + off, y + off]);
+      if (it.label) it.label = [it.label[0] + off, it.label[1] + off];
+      if (it.name) it.name = `${it.name} (kopi)`;
+      delete it.id;
+    } else if (clip.kind === "op" || clip.kind === "door") {
+      it.line = it.line.map((n) => n + off);
+    } else {
+      it.x += off;
+      it.y += off;
+    }
+    // Paste again and the next copy lands a step further on.
+    clip.item = clone(it);
+    const coll = this._config[COLL[clip.kind]];
+    coll.push(it);
+    this._sel = { kind: clip.kind, i: coll.length - 1 };
+    this._mode = clip.mode;
+    this._emit();
+    this._render();
+  }
+
   setConfig(config) {
     this._raw = config;
     if (this._dragging) return;
@@ -2524,7 +2578,7 @@ class GlowFloorplanCardEditor extends HTMLElement {
       return `<div class="panel">
         <h3>${isWin ? "Vindue" : "Dør"}</h3>
         <label>Type</label><select data-w="type">
-          <option value="door" ${isWin ? "" : "selected"}>Dør</option><option value="window" ${isWin ? "selected" : ""}>Vindue</option>
+          <option value="door" ${isWin ? "" : "selected"}>Dør</option><option value="window" ${isWin ? "selected" : ""}>Vindue</option><option value="opening">Åbning (uden dør)</option>
         </select>
         <label>Fløje</label><select data-w="leaves">
           <option value="1" ${d.leaves === 2 ? "" : "selected"}>Én fløj</option><option value="2" ${d.leaves === 2 ? "selected" : ""}>To fløje</option>
@@ -2534,9 +2588,10 @@ class GlowFloorplanCardEditor extends HTMLElement {
         <div class="row">
           <button data-act="flip-swing">⇅ Vend åbningsretning</button>
           <button data-act="flip-hinge">⇆ Vend hængsel</button>
+          <button data-act="rot-line">↻ Drej 90°</button>
         </div>
         <div class="row"><button class="danger" data-act="del-door">Slet</button><button data-act="deselect">Luk</button></div>
-        <div class="hint" style="grid-column:1/-1">Den orange prik er hængslet. Uden sensor vises ${isWin ? "vinduet" : "døren"} lukket, og den stiplede bue viser, hvordan den åbner.</div>
+        <div class="hint" style="grid-column:1/-1">Den orange prik er hængslet. Ctrl+C / Ctrl+V kopierer det valgte. Uden sensor vises ${isWin ? "vinduet" : "døren"} lukket, og den stiplede bue viser, hvordan den åbner.</div>
       </div>`;
     }
     if (s.kind === "op") {
@@ -2549,6 +2604,7 @@ class GlowFloorplanCardEditor extends HTMLElement {
         <label>Til</label><div class="grid2"><input data-o="x2" type="number" value="${x2}"><input data-o="y2" type="number" value="${y2}"></div>
         <label>Bredde</label><input data-o="width" type="number" placeholder="Automatisk (vægtykkelse)" value="${o.width ?? ""}">
         <label>Stiplet linje</label><input data-o="dashed" type="checkbox" ${o.dashed === false ? "" : "checked"}>
+        <div class="row"><button data-act="rot-line">↻ Drej 90°</button><button data-act="op-to-door">Gør til dør</button></div>
         <div class="row"><button class="danger" data-act="del-op">Slet</button><button data-act="deselect">Luk</button></div>
       </div>`;
     }
@@ -2615,6 +2671,16 @@ class GlowFloorplanCardEditor extends HTMLElement {
 
   _doorField(key, inp) {
     const d = this._config.doors[this._sel.i];
+    if (key === "type" && inp.value === "opening") {
+      // A plain gap in the wall: move it over to the openings.
+      this._config.doors.splice(this._sel.i, 1);
+      this._config.openings.push({ line: d.line.slice(), dashed: false });
+      this._sel = { kind: "op", i: this._config.openings.length - 1 };
+      this._mode = "openings";
+      this._emit();
+      this._render();
+      return;
+    }
     if (key === "type") d.type = inp.value;
     if (key === "leaves") inp.value === "2" ? (d.leaves = 2) : delete d.leaves;
     if (key === "fixed") inp.checked ? (d.swing = 0) : delete d.swing;
@@ -2744,6 +2810,24 @@ class GlowFloorplanCardEditor extends HTMLElement {
       if (d.swing === 0) {
         // fixed window: nothing to flip
       } else d.swing === -1 ? delete d.swing : (d.swing = -1);
+    }
+    if (act === "rot-line" && this._sel && (this._sel.kind === "door" || this._sel.kind === "op")) {
+      // Turn the line a quarter turn about its middle.
+      const o = (this._sel.kind === "door" ? c.doors : c.openings)[this._sel.i];
+      const [x1, y1, x2, y2] = o.line;
+      const mx = (x1 + x2) / 2;
+      const my = (y1 + y2) / 2;
+      o.line = [mx - (y1 - my), my + (x1 - mx), mx - (y2 - my), my + (x2 - mx)].map((n) => Math.round(n));
+    }
+    if (act === "op-to-door" && this._sel && this._sel.kind === "op") {
+      const o = c.openings[this._sel.i];
+      c.openings.splice(this._sel.i, 1);
+      c.doors.push({ type: "door", line: o.line.slice() });
+      this._sel = { kind: "door", i: c.doors.length - 1 };
+      this._mode = "doors";
+      this._emit();
+      this._render();
+      return;
     }
     if (act === "del-op" && this._sel) {
       c.openings.splice(this._sel.i, 1);
