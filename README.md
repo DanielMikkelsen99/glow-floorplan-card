@@ -135,9 +135,19 @@ furniture:
     rotation: 90         # degrees, about the centre
 ```
 
-More types: `stairs` (steps with an arrow pointing up; real steps in 3D), `washing_machine`, `dryer`, `desk` (with an office chair).
+More types: `stairs` (stairs going up: an arrow pointing up, real steps in 3D), `stairs_down` (stairs going down: an opening in the floor with steps that sink into it in 3D), `washing_machine`, `dryer`, `desk` (with an office chair).
+
+For `stairs_down` the top step is at the back of the piece (y = 0 before rotation), and the arrow points down the stairs. Optional keys: `depth` (how far the stairwell goes down in 3D, default 110) and `railing: false` to leave out the glass railing.
 
 Furniture is static: it is drawn like an architect's plan in 2D and as blocks in 3D.
+
+### Depth and shadows
+
+Floors darken softly towards the walls (ambient occlusion), and walls and furniture cast soft shadows on the floor, so the plan reads as a model rather than a flat drawing. In 3D the sides of walls and furniture also get lighter at the top and darker towards the floor. Light comes from the upper left. Turn it all off with:
+
+```yaml
+shading: false
+```
 
 ### 3D view
 

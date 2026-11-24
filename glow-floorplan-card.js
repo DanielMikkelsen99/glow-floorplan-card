@@ -10,7 +10,7 @@
  * License: MIT
  */
 
-const VERSION = "1.4.4";
+const VERSION = "1.5.0";
 const CARD_TAG = "glow-floorplan-card";
 const EDITOR_TAG = "glow-floorplan-card-editor";
 
@@ -50,6 +50,8 @@ const PALETTE = {
     dash: "#c9d0de",
     text: "#5b6478",
     shadow: 0.5,
+    ao: 0.2,
+    cast: 0.16,
   },
   night: {
     bg: "transparent",
@@ -60,6 +62,8 @@ const PALETTE = {
     dash: "#555d70",
     text: "#aab3c7",
     shadow: 0.6,
+    ao: 0.38,
+    cast: 0.3,
   },
 };
 
@@ -238,7 +242,8 @@ const FURNITURE = {
   kitchen_counter: { name: "Køkkenbord", w: 200, h: 50, z: 75 },
   washing_machine: { name: "Vaskemaskine", w: 50, h: 50, z: 70 },
   dryer: { name: "Tørretumbler", w: 50, h: 50, z: 70 },
-  stairs: { name: "Trappe", w: 80, h: 230, z: 95, stairs: true },
+  stairs: { name: "Trappe op", w: 80, h: 230, z: 95, stairs: true },
+  stairs_down: { name: "Trappe ned", w: 80, h: 230, z: 40, down: true, depth: 110 },
 };
 
 const FURN_PALETTE = {
@@ -359,6 +364,21 @@ function furnitureDrawing(type, w, h, q, part = "all") {
       out.push(C(w / 2, h - 10, 4, q.line));
       break;
     }
+    case "stairs_down": {
+      // The top step is at y = 0; each step further on is darker (lower), the arrow points down.
+      // A railing runs along both long sides and the far end.
+      const n = Math.max(3, Math.round(h / 22));
+      out.push(R(0, 0, w, h, q.soft, 2));
+      for (let i = 0; i < n; i++) {
+        out.push(`<rect x="0" y="${(h / n) * i}" width="${w}" height="${h / n}" fill="#000" fill-opacity="${(0.04 + (0.34 * i) / (n - 1)).toFixed(3)}"/>`);
+        if (i) out.push(L(0, (h / n) * i, w, (h / n) * i));
+      }
+      out.push(`<polyline points="0,0 0,${h} ${w},${h} ${w},0" fill="none" stroke="${q.line}" stroke-width="4" stroke-linejoin="round"/>`);
+      out.push(`<line x1="${w / 2}" y1="10" x2="${w / 2}" y2="${h - 12}" stroke="${q.fur}" stroke-width="2.5"/>`);
+      out.push(`<polyline points="${w / 2 - 9},${h - 22} ${w / 2},${h - 10} ${w / 2 + 9},${h - 22}" fill="none" stroke="${q.fur}" stroke-width="2.5" stroke-linejoin="round"/>`);
+      out.push(`<circle cx="${w / 2}" cy="10" r="4" fill="${q.fur}"/>`);
+      break;
+    }
     case "coffee_table":
       out.push(R(0, 0, w, h, q.wood, 8));
       out.push(R(5, 5, w - 10, h - 10, "none", 5, 'stroke-opacity="0.5"'));
@@ -402,6 +422,25 @@ function furnitureDrawing(type, w, h, q, part = "all") {
       out.push(R(0, 0, w, h, q.fur, 4));
   }
   return out.join("");
+}
+
+/** Convex hull (monotone chain) of plan points, used for soft cast shadows. */
+function hull(points) {
+  const p = points.map((q) => [q[0], q[1]]).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  if (p.length < 3) return p;
+  const cross = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const lo = [];
+  for (const q of p) {
+    while (lo.length >= 2 && cross(lo[lo.length - 2], lo[lo.length - 1], q) <= 0) lo.pop();
+    lo.push(q);
+  }
+  const up = [];
+  for (let i = p.length - 1; i >= 0; i--) {
+    const q = p[i];
+    while (up.length >= 2 && cross(up[up.length - 2], up[up.length - 1], q) <= 0) up.pop();
+    up.push(q);
+  }
+  return lo.slice(0, -1).concat(up.slice(0, -1));
 }
 
 /** 2D placement transform: x, y is the top-left corner before rotation; rotation is about the centre. */
@@ -543,7 +582,9 @@ class Renderer {
     const q = FURN_PALETTE[this.mode()];
     const u = this.uid;
     const glowStrength = c.glow_strength === undefined ? 1 : Number(c.glow_strength);
-    const out = { defs: [], floor: [], glow: [], pulses: [], labels: [], hits: [], furniture: [], furnitureFloor: [], openings: "", p, q };
+    const out = { defs: [], floor: [], ao: [], shadows: [], glow: [], pulses: [], labels: [], hits: [], furniture: [], furnitureFloor: [], openings: "", p, q };
+    const shade = c.shading !== false;
+    const ww = c.wall_width || 24;
 
     out.defs.push(`
       <linearGradient id="f-${u}" x1="0" y1="0" x2="1" y2="1">
@@ -554,7 +595,16 @@ class Renderer {
       </filter>
       <filter id="shw-${u}" x="-5%" y="-5%" width="110%" height="110%">
         <feDropShadow dx="1.5" dy="2.5" stdDeviation="1.8" flood-color="#000" flood-opacity="${(p.shadow * 0.5).toFixed(2)}"/>
-      </filter>`);
+      </filter>
+      <filter id="ao-${u}" x="-10%" y="-10%" width="120%" height="120%"><feGaussianBlur stdDeviation="${(ww * 0.55).toFixed(1)}"/></filter>
+      <filter id="cs-${u}" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="7"/></filter>
+      <filter id="ct-${u}" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="2.2"/></filter>
+      <linearGradient id="sd-${u}" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#fff" stop-opacity="${this.mode() === "night" ? 0.06 : 0.25}"/>
+        <stop offset="0.55" stop-color="#000" stop-opacity="0"/>
+        <stop offset="1" stop-color="#000" stop-opacity="${this.mode() === "night" ? 0.32 : 0.2}"/>
+      </linearGradient>`);
+    out.defs.push(`<clipPath id="cpall-${u}">${c.rooms.filter((r) => r.points.length >= 3).map((r) => `<polygon points="${r.points.map((v) => v.join(",")).join(" ")}"/>`).join("")}</clipPath>`);
 
     c.rooms.forEach((r, i) => {
       if (r.points.length < 3) return;
@@ -562,6 +612,8 @@ class Renderer {
       out.defs.push(`<clipPath id="cp-${u}-${i}"><polygon points="${pts}"/></clipPath>`);
       // Walls are drawn separately (same geometry as in 3D), so floors get only a hairline.
       out.floor.push(`<polygon points="${pts}" fill="url(#f-${u})" stroke="${p.floorB}" stroke-width="1.5" stroke-linejoin="miter"/>`);
+      // Ambient occlusion: the floor darkens softly towards the walls.
+      if (shade) out.ao.push(`<g clip-path="url(#cp-${u}-${i})"><polygon points="${pts}" fill="none" stroke="#000" stroke-width="${(ww * 2.2).toFixed(1)}" stroke-linejoin="round" filter="url(#ao-${u})"/></g>`);
     });
 
     out.openings = c.openings
@@ -580,6 +632,12 @@ class Renderer {
         if (FURNITURE[f.type] && FURNITURE[f.type].chairs) out.furnitureFloor.push(`<g transform="${t}">${furnitureDrawing(f.type, w, h, q, "floor")}</g>`);
       } else {
         out.furniture.push(`<g transform="${t}">${furnitureDrawing(f.type, w, h, q)}</g>`);
+        const spec = FURNITURE[f.type] || {};
+        if (shade && !spec.down && spec.z > 10) {
+          // Seen from above, light from the upper left: a soft shadow down and to the right.
+          const o = Math.min(14, spec.z * 0.09);
+          out.shadows.push(`<g transform="translate(${o.toFixed(1)} ${(o * 1.3).toFixed(1)})"><g transform="${t}"><rect width="${w}" height="${h}" rx="6"/></g></g>`);
+        }
       }
     });
 
@@ -648,6 +706,18 @@ class Renderer {
     return out;
   }
 
+  /** Floor shading in plan coordinates: ambient occlusion along the walls, then cast shadows. */
+  depthLayer(P, cast = P.shadows, contact = []) {
+    if (this.c.shading === false) return "";
+    const u = this.uid;
+    return `<g pointer-events="none">
+      <g opacity="${P.p.ao}">${P.ao.join("")}</g>
+      <g clip-path="url(#cpall-${u})">
+        <g opacity="${P.p.cast}" fill="#000" filter="url(#cs-${u})">${cast.join("")}</g>
+        <g opacity="${(P.p.cast * 1.6).toFixed(2)}" fill="#000" filter="url(#ct-${u})">${contact.join("")}</g>
+      </g></g>`;
+  }
+
   labelSvg(x, y, text, p) {
     return `<text x="${x}" y="${y}" font-family="Helvetica,Arial,sans-serif" font-size="${this.c.label_size || 28}" font-weight="600" fill="${p.text}" text-anchor="middle" dominant-baseline="middle">${esc(text)}</text>`;
   }
@@ -681,6 +751,7 @@ class Renderer {
     return `<svg class="plan" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet">
       <defs>${P.defs.join("")}</defs>
       <g filter="url(#sh-${u})">${P.floor.join("")}</g>
+      ${this.depthLayer(P)}
       <g pointer-events="none">${P.furniture.join("")}</g>
       <g>${P.glow.join("")}</g>
       <g>${roomPulses.join("")}</g>
@@ -874,7 +945,10 @@ class Renderer {
       if (facing <= 0) continue;
       const lit = nx * v.cos - ny * v.sin < 0; // left-facing sides catch the light
       const q = [v.proj(x1, y1, z0), v.proj(x2, y2, z0), v.proj(x2, y2, z1), v.proj(x1, y1, z1)];
-      faces.push(`<polygon points="${q.map((c) => c.map((n2) => n2.toFixed(1)).join(",")).join(" ")}" fill="${lit ? colors.side : colors.side2}" ${opts.sideExtra || ""} stroke="${colors.edge || "none"}" stroke-width="1"/>`);
+      const qp = q.map((c) => c.map((n2) => n2.toFixed(1)).join(",")).join(" ");
+      faces.push(`<polygon points="${qp}" fill="${lit ? colors.side : colors.side2}" ${opts.sideExtra || ""} stroke="${colors.edge || "none"}" stroke-width="1"/>`);
+      // Height shading: a touch of light at the top edge, darker where the side meets the floor.
+      if (this.c.shading !== false && !opts.flat && z1 - z0 > 8) faces.push(`<polygon points="${qp}" fill="url(#sd-${this.uid})" ${opts.sideExtra || ""}/>`);
     }
     if (!opts.noTop) {
       const top = corners.map(([x, y]) => v.proj(x, y, z1));
@@ -975,6 +1049,57 @@ class Renderer {
     return out;
   }
 
+  /**
+   * Stairs going down: an opening in the floor with the steps sinking into it.
+   * Everything below the floor is clipped to the opening, so the floor in
+   * front of it hides the near side, like looking down a real stairwell.
+   */
+  pit3d(f, w, h, spec, q, pits, defs, items) {
+    const v = this.view3d();
+    const u = this.uid;
+    const D = Number(f.depth) || spec.depth || 110;
+    const n = Math.max(3, Math.round(h / 22));
+    const W = (lx, ly) => furnitureLocalToWorld(f, w, h, lx, ly);
+    const P2 = (pts) => pts.map((c) => c.map((n2) => n2.toFixed(1)).join(",")).join(" ");
+    const id = `pit-${u}-${this.c.furniture.indexOf(f)}`;
+    const open = [[0, 0], [w, 0], [w, h], [0, h]].map(([x, y]) => W(x, y));
+    defs.push(`<clipPath id="${id}"><polygon points="${P2(open.map(([x, y]) => v.proj(x, y, 0)))}"/></clipPath>`);
+    const dark = this.mode() === "night" ? 0.55 : 0.42;
+    const out = [];
+    // Shaft walls, far ones first.
+    const edges = open.map((a, i) => [a, open[(i + 1) % 4]]).sort((A, B) => v.depth(...A[0]) + v.depth(...A[1]) - v.depth(...B[0]) - v.depth(...B[1]));
+    out.push(`<polygon points="${P2(open.map(([x, y]) => v.proj(x, y, -D)))}" fill="${q.side2}"/>`);
+    for (const [a, b] of edges) {
+      const quad = [v.proj(a[0], a[1], 0), v.proj(b[0], b[1], 0), v.proj(b[0], b[1], -D), v.proj(a[0], a[1], -D)];
+      out.push(`<polygon points="${P2(quad)}" fill="${q.side}" stroke="${q.line}" stroke-width="1"/><polygon points="${P2(quad)}" fill="#000" fill-opacity="${dark}"/>`);
+    }
+    // Steps: the first one is one riser below the floor at y = 0.
+    const steps = [];
+    for (let i = 0; i < n; i++) {
+      const y1 = (h / n) * i;
+      const y2 = (h / n) * (i + 1);
+      const top = -(D / n) * (i + 1) + D / n / 2;
+      const pts = [[0, y1], [w, y1], [w, y2], [0, y2]].map(([x, y]) => W(x, y));
+      const mid = W(w / 2, (y1 + y2) / 2);
+      const shade = `<polygon points="${P2(pts.map(([x, y]) => v.proj(x, y, top)))}" fill="#000" fill-opacity="${((dark * i) / (n - 1)).toFixed(3)}"/>`;
+      steps.push({ d: v.depth(...mid), svg: this.prism(pts, -D, top, { top: q.soft, side: q.side, side2: q.side2, edge: q.line }, { flat: true }) + shade });
+    }
+    steps.sort((a, b) => a.d - b.d);
+    out.push(...steps.map((st) => st.svg));
+    pits.push(`<g clip-path="url(#${id})">${out.join("")}</g><polygon points="${P2(open.map(([x, y]) => v.proj(x, y, 0)))}" fill="none" stroke="${q.line}" stroke-width="1.5"/>`);
+    // Glass railing on the two long sides and the far end.
+    if (f.railing !== false) {
+      const r = 3;
+      const glass = { top: q.metal, side: q.metal, side2: q.metal, edge: q.line };
+      const rails = [[[0, 0], [r, h]], [[w - r, 0], [w, h]], [[0, h - r], [w, h]]];
+      for (const [[x1, y1], [x2, y2]] of rails) {
+        const foot = [[x1, y1], [x2, y1], [x2, y2], [x1, y2]].map(([x, y]) => W(x, y));
+        const c = W((x1 + x2) / 2, (y1 + y2) / 2);
+        items.push({ d: v.depth(...c), foot, svg: this.prism(foot, 0, spec.z, glass, { flat: true, sideExtra: 'fill-opacity="0.4"' }) });
+      }
+    }
+  }
+
   svg3d() {
     const v = this.view3d();
     const P = this.parts();
@@ -986,6 +1111,16 @@ class Renderer {
     const glassCol = { top: night ? "#9fc8ea" : "#cfe6f8", side: night ? "#5a8fbf" : "#9cc9ee", side2: night ? "#4d7fac" : "#86b9e3", edge: "none" };
     const t = (this.c.wall_width || 24) * 0.55;
     const items = [];
+    const cast = [];
+    const contact = [];
+    const pits = [];
+    const pitDefs = [];
+    // Light from the upper left of the screen: shadows fall right and a little towards the viewer.
+    const sd = [v.cos * 0.5 + v.sin * 0.22, -v.sin * 0.5 + v.cos * 0.22];
+    const shadowOf = (foot, z) => {
+      const pts = [...foot, ...foot.map(([x, y]) => [x + sd[0] * z, y + sd[1] * z])];
+      return `<polygon points="${hull(pts).map((c) => c.map((n2) => n2.toFixed(1)).join(",")).join(" ")}"/>`;
+    };
 
     for (const s of this.wallSegments()) {
       if (s.kind === "gap") continue;
@@ -1001,6 +1136,7 @@ class Renderer {
         const sill = v.wallH * 0.32;
         svg = this.prism(foot, 0, sill, wallCol) + this.prism(foot, sill, v.wallH, glassCol, { sideExtra: 'fill-opacity="0.45"', topExtra: 'fill-opacity="0.6"' });
       } else svg = this.prism(foot, 0, v.wallH, wallCol);
+      cast.push(shadowOf(foot, s.kind === "glass" ? v.wallH * 0.45 : v.wallH));
       items.push({ d: v.depth((ax + bx) / 2, (ay + by) / 2), foot, svg });
     }
 
@@ -1010,6 +1146,12 @@ class Renderer {
       const [w, h, spec] = furnitureSize(f);
       const z = spec.z;
       const [cx, cy] = [f.x + w / 2, f.y + h / 2];
+      if (spec.down) {
+        this.pit3d(f, w, h, spec, q, pits, pitDefs, items);
+        return;
+      }
+      cast.push(shadowOf(furnitureCorners(f, w, h), z));
+      contact.push(`<polygon points="${furnitureCorners(f, w, h).map((c) => c.join(",")).join(" ")}"/>`);
       if (spec.stairs) {
         // Real steps: each band is a little higher than the one in front of it.
         const n = Math.max(3, Math.round(h / 22));
@@ -1044,12 +1186,18 @@ class Renderer {
       })
       .join("");
     return `<svg class="plan" viewBox="${vx} ${vy} ${vw} ${vh}" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet">
-      <defs>${P.defs.join("")}</defs>
+      <defs>${P.defs.join("")}${pitDefs.join("")}</defs>
       <g transform="${v.matrix(0)}">
         <g filter="url(#sh-${u})">${P.floor.join("")}</g>
+        ${this.depthLayer(P, cast, contact)}
+      </g>
+      <g transform="${v.matrix(0)}">
         ${P.openings}
         <g pointer-events="none">${P.furnitureFloor.join("")}</g>
         <g>${P.glow.join("")}</g>
+      </g>
+      <g pointer-events="none">${pits.join("")}</g>
+      <g transform="${v.matrix(0)}">
         ${P.doorFront}
         <g>${P.pulses.join("")}</g>
         <g>${P.hits.join("")}</g>

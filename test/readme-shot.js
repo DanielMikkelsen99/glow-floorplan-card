@@ -9,6 +9,7 @@ cfg.furniture = [
   { type: 'armchair', x: 280, y: 780, rotation: 90 }, { type: 'kitchen_counter', x: 270, y: 1085 },
   { type: 'kitchen_counter', x: 265, y: 950, w: 150, rotation: 180 }, { type: 'toilet', x: 175, y: 1110, rotation: 90 },
   { type: 'shower', x: 115, y: 1025 }, { type: 'sofa_3', x: 640, y: 520, rotation: 90 },
+  { type: 'stairs_down', x: 290, y: 560, w: 80, h: 220 },
 ];
 cfg.doors = [{ type: 'door', line: [100, 760, 100, 840], sensor: 'binary_sensor.front_door' },
   { type: 'window', line: [597, 600, 597, 690] }, { type: 'window', line: [380, 110, 480, 110], leaves: 2 }];
@@ -59,6 +60,6 @@ const S = (night) => ({ 'sun.sun': { state: night ? 'below_horizon' : 'above_hor
     return { x, y, width: Math.max(...rs.map((r) => r.right)) - x, height: Math.max(...rs.map((r) => r.bottom)) - y };
   });
   await page.setViewportSize({ width: 1460, height: Math.ceil(box.y + box.height + 40) });
-  await page.screenshot({ path: __dirname + '/../images/preview.png', clip: { x: box.x - 8, y: box.y - 8, width: box.width + 16, height: box.height + 16 } });
+  await page.screenshot({ path: (process.argv[2] || __dirname + '/../images/preview.png'), clip: { x: box.x - 8, y: box.y - 8, width: box.width + 16, height: box.height + 16 } });
   await b.close();
 })();
