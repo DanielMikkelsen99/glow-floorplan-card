@@ -1,4 +1,4 @@
-// Renders images/preview.png for the README (2D day, 3D day, 3D night).
+// Renders images/preview-1.6.png for the README (2D and 3D, by day and at night).
 const { chromium } = require('/opt/npm-tools/node_modules/playwright');
 const fs = require('fs');
 const cfg = JSON.parse(fs.readFileSync(__dirname + '/example.json', 'utf8'));
@@ -48,7 +48,9 @@ const S = (night) => ({ 'sun.sun': { state: night ? 'below_horizon' : 'above_hor
       const card = document.createElement('glow-floorplan-card'); card.setConfig({ ...cfg, view, view_toggle: false });
       if (night) card.style.setProperty('--ha-card-background', '#1f232c');
       card.hass = { states: st }; col.appendChild(card); parent.appendChild(col); };
-    mk(row, d, '2d', false, 330);
+    const left = document.createElement('div'); left.style.cssText = 'display:flex;flex-direction:column;gap:16px';
+    row.appendChild(left);
+    mk(left, d, '2d', false, 300); mk(left, n, '2d', true, 300);
     const stack = document.createElement('div'); stack.style.cssText = 'display:flex;flex-direction:column;gap:16px';
     row.appendChild(stack);
     mk(stack, d, '3d', false, 560); mk(stack, n, '3d', true, 560);
@@ -60,6 +62,6 @@ const S = (night) => ({ 'sun.sun': { state: night ? 'below_horizon' : 'above_hor
     return { x, y, width: Math.max(...rs.map((r) => r.right)) - x, height: Math.max(...rs.map((r) => r.bottom)) - y };
   });
   await page.setViewportSize({ width: 1460, height: Math.ceil(box.y + box.height + 40) });
-  await page.screenshot({ path: (process.argv[2] || __dirname + '/../images/preview.png'), clip: { x: box.x - 8, y: box.y - 8, width: box.width + 16, height: box.height + 16 } });
+  await page.screenshot({ path: (process.argv[2] || __dirname + '/../images/preview-1.6.png'), clip: { x: box.x - 8, y: box.y - 8, width: box.width + 16, height: box.height + 16 } });
   await b.close();
 })();

@@ -2,7 +2,7 @@
 
 A floor plan card for Home Assistant where every room **glows in the real colour and brightness of its lamps**, rooms **pulse on motion**, robots show a **status ring**, and the plan switches between **day and night** with the sun. Everything is edited with **drag and drop** in the dashboard editor.
 
-![Glow Floorplan Card: 2D by day, 3D by day and 3D at night](https://raw.githubusercontent.com/DanielMikkelsen99/glow-floorplan-card/main/images/preview.png)
+![Glow Floorplan Card: 2D and 3D, by day and at night](https://raw.githubusercontent.com/DanielMikkelsen99/glow-floorplan-card/main/images/preview-1.6.png)
 
 - No dependencies, no build step: one JavaScript file.
 - No helper sensors: colour and brightness are read straight from each light.
