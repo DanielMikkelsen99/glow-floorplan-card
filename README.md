@@ -91,6 +91,9 @@ The editor has three tabs:
 | `motion` | Motion sensors; the room pulses while one is on |
 | `lights` | Extra lights that glow from the room centre (lamps placed as devices are picked up automatically) |
 | `entity`, `tap_action`, `hold_action` | Make the room itself tappable |
+| `tap_devices` | `false` makes a tap use only `entity` instead of every light in the room |
+
+**Tapping a room** switches all its lights as one: if any is on, all go off; otherwise all go on. The lights are the room's own `entity` (if it is a light or switch), its `lights`, and every device that glows (lights, and anything with `glow: true`) whose icon stands inside the room. Move a lamp's icon to another room and it is switched with that room from then on. A room with its own `tap_action` keeps that action. Holding a room opens its entity, or its first light.
 
 ### Devices
 

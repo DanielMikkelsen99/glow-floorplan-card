@@ -10,7 +10,7 @@
  * License: MIT
  */
 
-const VERSION = "1.5.0";
+const VERSION = "1.6.0";
 const CARD_TAG = "glow-floorplan-card";
 const EDITOR_TAG = "glow-floorplan-card-editor";
 
@@ -1365,6 +1365,26 @@ class Renderer {
 /* Action handling                                                      */
 /* ------------------------------------------------------------------ */
 
+/**
+ * The lights a room tap switches: the room's own light or switch, its `lights`,
+ * and every placed device that glows (lights, and devices with glow: true)
+ * whose icon stands in the room.
+ */
+function roomLights(fv, room) {
+  const ids = [];
+  const add = (id) => id && !ids.includes(id) && ids.push(id);
+  if (["light", "switch"].includes(domainOf(room.entity))) add(room.entity);
+  [].concat(room.lights || []).forEach(add);
+  for (const d of fv.devices) {
+    if (d.type === "label" || !d.entity) continue;
+    const glows = d.glow === undefined ? domainOf(d.entity) === "light" : !!d.glow;
+    if (!glows) continue;
+    const home = fv.rooms.find((r) => r.points.length > 2 && pointInPolygon(d.x, d.y, r.points));
+    if (home === room) add(d.entity);
+  }
+  return ids;
+}
+
 function defaultTap(entity) {
   const dom = domainOf(entity);
   if (["light", "switch", "fan", "input_boolean", "lock", "cover"].includes(dom)) return { action: "toggle" };
@@ -1622,13 +1642,22 @@ class GlowFloorplanCard extends HTMLElement {
     root.querySelectorAll(".room-hit[data-room]").forEach((el) => {
       const room = this._fv.rooms[Number(el.dataset.room)];
       if (!room) return;
+      const lights = room.tap_action || room.tap_devices === false ? [] : roomLights(this._fv, room);
       const cfg = {
-        entity: room.entity,
+        entity: room.entity || lights[0],
         tap_action: room.tap_action || defaultTap(room.entity),
         hold_action: room.hold_action || { action: "more-info" },
       };
-      bindPress(el, () => this._act(cfg, "tap"), () => this._act(cfg, "hold"));
+      // Without its own tap_action a room switches every light placed in it as one:
+      // all off when any is on, otherwise all on. Moving a lamp to another room moves it along.
+      const tap = lights.length ? () => this._toggleAll(lights) : () => this._act(cfg, "tap");
+      bindPress(el, tap, () => this._act(cfg, "hold"));
     });
+  }
+
+  _toggleAll(ids) {
+    const anyOn = ids.some((id) => isOn(this._hass.states[id]));
+    this._hass.callService("homeassistant", anyOn ? "turn_off" : "turn_on", { entity_id: ids });
   }
 
   _act(cfg, action) {
