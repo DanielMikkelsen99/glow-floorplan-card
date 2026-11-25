@@ -4,6 +4,8 @@ A floor plan card for Home Assistant where every room **glows in the real colour
 
 ![Glow Floorplan Card: 2D and 3D, by day and at night](https://raw.githubusercontent.com/DanielMikkelsen99/glow-floorplan-card/main/images/preview-1.7.png)
 
+**Dansk brugerguide:** [GUIDE.da.md](GUIDE.da.md)
+
 - No dependencies, no build step: one JavaScript file.
 - No helper sensors: colour and brightness are read straight from each light.
 - A lamp lights up the room it stands in. Drag it to another room and the glow follows.
