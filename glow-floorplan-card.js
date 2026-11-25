@@ -10,7 +10,7 @@
  * License: MIT
  */
 
-const VERSION = "1.7.0";
+const VERSION = "1.7.1";
 const CARD_TAG = "glow-floorplan-card";
 const EDITOR_TAG = "glow-floorplan-card-editor";
 
@@ -338,7 +338,7 @@ function furniture3dParts(type, w, h, z, q) {
     case "single_bed":
     case "double_bed": {
       const n = type === "double_bed" ? 2 : 1;
-      add(0, 0, w, h * 0.05, 0, z * 2.1, "wood");
+      add(0, 0, w, h * 0.05, 0, z * 1.6, "wood");
       add(0, h * 0.05, w, h, 4, z * 0.45, "wood");
       legs(0, h * 0.05, w, h, 4, 5, 2);
       add(3, h * 0.05, w - 3, h - 3, z * 0.45, z * 0.95, "soft");
@@ -1067,7 +1067,7 @@ class Renderer {
     const minY = Math.min(...pts.map((q) => q[1])) - m;
     const maxX = Math.max(...pts.map((q) => q[0])) + m;
     const maxY = Math.max(...pts.map((q) => q[1])) + m;
-    this._v3 = { proj, depth, matrix, wallH, sin, cos, vb: [minX, minY, maxX - minX, maxY - minY] };
+    this._v3 = { proj, depth, matrix, wallH, sin, cos, s, k, vb: [minX, minY, maxX - minX, maxY - minY] };
     return this._v3;
   }
 
@@ -1247,6 +1247,8 @@ class Renderer {
   paintOrder(items) {
     const v = this.view3d();
     const vd = [v.sin, v.cos]; // plan direction towards the viewer
+    const s0 = v.s;
+    const k0 = v.k;
     const pd = [v.cos, -v.sin]; // plan direction of screen x
     const n = items.length;
     const proj = (pts, [ax, ay]) => {
@@ -1273,13 +1275,19 @@ class Renderer {
       const f = it.foot || [];
       const cx = f.reduce((a, p) => a + p[0], 0) / (f.length || 1);
       const cy = f.reduce((a, p) => a + p[1], 0) / (f.length || 1);
-      return { f, c: [cx, cy], ax: axes(f), sx: proj(f, pd) };
+      // Screen-vertical extent of the whole box (floor to its top), so pieces
+      // that are only level with each other on screen get no order at all.
+      const zt = it.z ?? v.wallH;
+      const sy = f.length ? proj(f, vd).map((d, k) => d * s0 - (k ? 0 : zt) * k0) : [0, 0];
+      return { f, c: [cx, cy], ax: axes(f), sx: proj(f, pd), sy };
     });
     // front(i, j): +1 if i must be painted after j, -1 if before, 0 if independent.
     const front = (A, B) => {
       // Shadows side by side on screen: they cannot cover each other.
       if (A.sx[1] <= B.sx[0] + 0.5 || B.sx[1] <= A.sx[0] + 0.5) return 0;
+      if (A.sy[1] <= B.sy[0] + 0.5 || B.sy[1] <= A.sy[0] + 0.5) return 0;
       let best = null;
+      let shifted = null;
       for (const ax of [...A.ax, ...B.ax]) {
         const along = ax[0] * vd[0] + ax[1] * vd[1];
         if (Math.abs(along) < 1e-4) continue;
@@ -1291,10 +1299,20 @@ class Renderer {
           const aPlus = alo >= bhi - 0.01;
           return (aPlus ? 1 : -1) * Math.sign(along);
         }
-        // Touching/overlapping footprints (wall corners, furniture pushed into a wall):
-        // keep the axis with the smallest overlap and decide by the centres along it.
+        // Touching/overlapping footprints (wall corners, furniture pushed into a wall).
+        // Prefer an axis along which one box is clearly shifted past the other
+        // (both its ends further along): at an L-shaped wall corner the short
+        // wall sticks out of the long one, and that decides it. Comparing
+        // centres alone could go either way there and form a cycle.
+        const dlo = alo - blo;
+        const dhi = ahi - bhi;
+        if ((dlo >= -0.01 && dhi >= -0.01) || (dlo <= 0.01 && dhi <= 0.01)) {
+          const shift = (dlo + dhi) / 2;
+          if (Math.abs(shift) > 0.5 && (!shifted || Math.abs(shift) > Math.abs(shifted.shift))) shifted = { shift, along };
+        }
         if (!best || pen < best.pen) best = { pen, ax, along };
       }
+      if (shifted) return Math.sign(shifted.shift) * Math.sign(shifted.along);
       if (!best) return 0;
       const ca = A.c[0] * best.ax[0] + A.c[1] * best.ax[1];
       const cb = B.c[0] * best.ax[0] + B.c[1] * best.ax[1];
@@ -1341,26 +1359,42 @@ class Renderer {
       const mid = furnitureLocalToWorld(f, w, h, (p[0] + p[2]) / 2, (p[1] + p[3]) / 2);
       return { p, corners, bb: [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)], d: v.depth(mid[0], mid[1]) };
     });
+    // Screen footprint of each box (all eight corners), so only boxes that
+    // can actually cover each other on screen get an order between them.
     box.forEach((bx) => {
-      const sx = bx.corners.map(([x, y]) => x * v.cos - y * v.sin);
+      const sx = [];
+      const sy = [];
+      for (const [x, y] of bx.corners)
+        for (const z of [bx.p[4], bx.p[5]]) {
+          const [px, py] = v.proj(x, y, z);
+          sx.push(px);
+          sy.push(py);
+        }
       bx.sx = [Math.min(...sx), Math.max(...sx)];
-      bx.c = [(bx.bb[0] + bx.bb[2]) / 2, (bx.bb[1] + bx.bb[3]) / 2];
+      bx.sy = [Math.min(...sy), Math.max(...sy)];
     });
-    const ovX = (a, b) => Math.min(a.bb[2], b.bb[2]) - Math.max(a.bb[0], b.bb[0]);
-    const ovY = (a, b) => Math.min(a.bb[3], b.bb[3]) - Math.max(a.bb[1], b.bb[1]);
-    // before(a, b): a must be drawn before b.
+    const E = 0.01;
+    // before(a, b): a must be drawn before b. The boxes are axis-aligned and do
+    // not interpenetrate, so a plane along x, y or z separates them. Whichever
+    // separating plane is used, the box on the viewer's side of it is in front
+    // whenever the two overlap on screen, so this is consistent and acyclic in
+    // practice (the old mix of "stacked" and centre rules could form cycles,
+    // which put the back chairs on top of the dining table).
     const before = (a, b) => {
-      if (ovX(a, b) > 0.5 && ovY(a, b) > 0.5) {
-        // Stacked (a seat under a table top, a mattress on a frame): the lower one first.
-        if (a.p[5] <= b.p[4] + 0.01) return true;
-        if (b.p[5] <= a.p[4] + 0.01) return false;
-        return a.d < b.d;
-      }
-      // Side by side on screen: they cannot cover each other.
       if (a.sx[1] <= b.sx[0] + 0.5 || b.sx[1] <= a.sx[0] + 0.5) return false;
-      // Separated on the floor: the one nearer the viewer along the separating axis goes last.
-      if (ovX(a, b) <= 0.5 && Math.abs(v.sin) > 1e-3) return a.c[0] * v.sin < b.c[0] * v.sin;
-      if (ovY(a, b) <= 0.5 && Math.abs(v.cos) > 1e-3) return a.c[1] * v.cos < b.c[1] * v.cos;
+      if (a.sy[1] <= b.sy[0] + 0.5 || b.sy[1] <= a.sy[0] + 0.5) return false;
+      // Below: the viewer looks down, so the lower box is further away.
+      if (a.p[5] <= b.p[4] + E) return true;
+      if (b.p[5] <= a.p[4] + E) return false;
+      // Side by side on the floor: the one further from the viewer first.
+      if (Math.abs(v.sin) > 1e-3) {
+        if (a.bb[2] <= b.bb[0] + E) return v.sin > 0;
+        if (b.bb[2] <= a.bb[0] + E) return v.sin < 0;
+      }
+      if (Math.abs(v.cos) > 1e-3) {
+        if (a.bb[3] <= b.bb[1] + E) return v.cos > 0;
+        if (b.bb[3] <= a.bb[1] + E) return v.cos < 0;
+      }
       return a.d < b.d;
     };
     const n = box.length;
@@ -1430,7 +1464,7 @@ class Renderer {
       for (const [[x1, y1], [x2, y2]] of rails) {
         const foot = [[x1, y1], [x2, y1], [x2, y2], [x1, y2]].map(([x, y]) => W(x, y));
         const c = W((x1 + x2) / 2, (y1 + y2) / 2);
-        items.push({ d: v.depth(...c), foot, svg: this.prism(foot, 0, spec.z, glass, { flat: true, sideExtra: 'fill-opacity="0.4"' }) });
+        items.push({ d: v.depth(...c), foot, z: spec.z, svg: this.prism(foot, 0, spec.z, glass, { flat: true, sideExtra: 'fill-opacity="0.4"' }) });
       }
     }
   }
@@ -1472,7 +1506,7 @@ class Renderer {
         svg = this.prism(foot, 0, sill, wallCol) + this.prism(foot, sill, v.wallH, glassCol, { sideExtra: 'fill-opacity="0.45"', topExtra: 'fill-opacity="0.6"' });
       } else svg = this.prism(foot, 0, v.wallH, wallCol);
       cast.push(shadowOf(foot, s.kind === "glass" ? v.wallH * 0.45 : v.wallH));
-      items.push({ d: v.depth((ax + bx) / 2, (ay + by) / 2), foot, svg });
+      items.push({ d: v.depth((ax + bx) / 2, (ay + by) / 2), foot, z: v.wallH, svg });
     }
 
     const q = P.q;
@@ -1499,14 +1533,14 @@ class Renderer {
           bands.push({ d: v.depth(mid[0], mid[1]), svg: this.prism(pts, 0, (z / n) * (i + 1), { top: q.soft, side: q.side, side2: q.side2, edge: q.line }) });
         }
         bands.sort((a, b) => a.d - b.d);
-        items.push({ d: v.depth(cx, cy), foot: furnitureCorners(f, w, h), svg: bands.map((b) => b.svg).join("") });
+        items.push({ d: v.depth(cx, cy), foot: furnitureCorners(f, w, h), z, svg: bands.map((b) => b.svg).join("") });
         return;
       }
       const parts = furniture3dParts(f.type, w, h, z, q);
       if (parts) {
         // The kitchen worktop keeps its sink and hob drawn on top.
         const top = f.type === "kitchen_counter" ? `<g transform="${v.matrix(z)}"><g transform="${furnitureTransform(f, w, h)}">${furnitureDrawing(f.type, w, h, q, "top")}</g></g>` : "";
-        items.push({ d: v.depth(cx, cy), foot: furnitureCorners(f, w, h), svg: this.partsSvg(f, w, h, parts, q) + top });
+        items.push({ d: v.depth(cx, cy), foot: furnitureCorners(f, w, h), z: Math.max(z, ...parts.map((p) => p[5])), svg: this.partsSvg(f, w, h, parts, q) + top });
         return;
       }
       let corners = furnitureCorners(f, w, h);
@@ -1517,12 +1551,12 @@ class Renderer {
       if (spec.tv) {
         const on = this.tvOn(f);
         const scr = on ? { top: q.screen, side: "#dfe9ff", side2: "#c9d8f5", edge: q.screenEdge } : { top: q.screen, side: q.screen, side2: q.screen, edge: q.screenEdge };
-        items.push({ d: v.depth(cx, cy), foot: corners, svg: this.prism(corners, 0, z, scr) });
+        items.push({ d: v.depth(cx, cy), foot: corners, z, svg: this.prism(corners, 0, z, scr) });
         return;
       }
       const body = this.prism(corners, 0, z, furnCol, { noTop: true });
       const top = `<g transform="${v.matrix(z)}"><g transform="${furnitureTransform(f, w, h)}">${furnitureDrawing(f.type, w, h, q, "top")}</g></g>`;
-      items.push({ d: v.depth(cx, cy), foot: furnitureCorners(f, w, h), svg: body + top });
+      items.push({ d: v.depth(cx, cy), foot: furnitureCorners(f, w, h), z, svg: body + top });
     });
 
     const ordered = this.paintOrder(items);
