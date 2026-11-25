@@ -2,7 +2,7 @@
 
 A floor plan card for Home Assistant where every room **glows in the real colour and brightness of its lamps**, rooms **pulse on motion**, robots show a **status ring**, and the plan switches between **day and night** with the sun. Everything is edited with **drag and drop** in the dashboard editor.
 
-![Glow Floorplan Card: 2D and 3D, by day and at night](https://raw.githubusercontent.com/DanielMikkelsen99/glow-floorplan-card/main/images/preview-1.6.png)
+![Glow Floorplan Card: 2D and 3D, by day and at night](https://raw.githubusercontent.com/DanielMikkelsen99/glow-floorplan-card/main/images/preview-1.7.png)
 
 - No dependencies, no build step: one JavaScript file.
 - No helper sensors: colour and brightness are read straight from each light.
@@ -96,6 +96,7 @@ The editor has five tabs:
 | `lights` | Extra lights that glow from the room centre (lamps placed as devices are picked up automatically) |
 | `entity`, `tap_action`, `hold_action` | Make the room itself tappable |
 | `tap_devices` | `false` makes a tap use only `entity` instead of every light in the room |
+| `floor` | Floor material: `carpet` (gulvtæppe), `tiles` (fliser), `klinker`, `wood` (plank floor), `herringbone` (sildeben) or `laminate`. Shown in 2D and 3D, by day and at night; the light glow still lies on top. Pick it under **Gulv** in the room editor |
 
 **Tapping a room** switches all its lights as one: if any is on, all go off; otherwise all go on. The lights are the room's own `entity` (if it is a light or switch), its `lights`, and every device that glows (lights, and anything with `glow: true`) whose icon stands inside the room. Move a lamp's icon to another room and it is switched with that room from then on. A room with its own `tap_action` keeps that action. Holding a room opens its entity, or its first light.
 
@@ -143,6 +144,18 @@ furniture:
 ```
 
 More types: `stairs` (stairs going up: an arrow pointing up, real steps in 3D), `stairs_down` (stairs going down: an opening in the floor with steps that sink into it in 3D), `washing_machine`, `dryer`, `desk` (with an office chair).
+
+`tv` is a TV: a thin dark panel with the screen facing the front (y = h before rotation). Give it an `entity` and it sends a soft white cone of light across the floor in front of it while that entity uses more than standby: a power sensor above `threshold` watts (default 5), or a media player or switch that is on. In 3D the screen lights up too. Set both under **Enhed** and **Standby under** in the furniture editor.
+
+```yaml
+furniture:
+  - type: tv
+    x: 430
+    y: 845
+    rotation: 180
+    entity: sensor.fjernsyn_power
+    threshold: 5
+```
 
 For `stairs_down` the top step is at the back of the piece (y = 0 before rotation), and the arrow points down the stairs. Optional keys: `depth` (how far the stairwell goes down in 3D, default 110) and `railing: false` to leave out the glass railing.
 

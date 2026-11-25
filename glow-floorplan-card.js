@@ -10,7 +10,7 @@
  * License: MIT
  */
 
-const VERSION = "1.6.0";
+const VERSION = "1.7.0";
 const CARD_TAG = "glow-floorplan-card";
 const EDITOR_TAG = "glow-floorplan-card-editor";
 
@@ -244,12 +244,50 @@ const FURNITURE = {
   dryer: { name: "Tørretumbler", w: 50, h: 50, z: 70 },
   stairs: { name: "Trappe op", w: 80, h: 230, z: 95, stairs: true },
   stairs_down: { name: "Trappe ned", w: 80, h: 230, z: 40, down: true, depth: 110 },
+  tv: { name: "Fjernsyn", w: 120, h: 12, z: 70, tv: true },
+};
+
+/**
+ * Floor materials a room can have. Each is a pattern laid over the floor colour,
+ * so day and night still apply and the light glow is drawn on top.
+ */
+const FLOORS = {
+  carpet: "Gulvtæppe",
+  tiles: "Fliser",
+  klinker: "Klinker",
+  wood: "Træ (plankegulv)",
+  herringbone: "Sildeben",
+  laminate: "Laminat",
 };
 
 const FURN_PALETTE = {
-  day: { fur: "#ffffff", line: "#b3bccd", accent: "#dde3ee", soft: "#f3f5f9", wood: "#e8dcc9", metal: "#c7ced9", side: "#d6dce7", side2: "#c6cdda" },
-  night: { fur: "#586176", line: "#7d879e", accent: "#4a5368", soft: "#525b70", wood: "#635a4c", metal: "#6d778d", side: "#434b5e", side2: "#3a4253" },
+  day: { fur: "#ffffff", line: "#b3bccd", accent: "#dde3ee", soft: "#f3f5f9", wood: "#e8dcc9", metal: "#c7ced9", side: "#d6dce7", side2: "#c6cdda", screen: "#2a2f3a", screenEdge: "#565e70" },
+  night: { fur: "#586176", line: "#7d879e", accent: "#4a5368", soft: "#525b70", wood: "#635a4c", metal: "#6d778d", side: "#434b5e", side2: "#3a4253", screen: "#1a1d25", screenEdge: "#3d4456" },
 };
+
+/** SVG patterns for the floor materials, in plan units (1 unit ≈ 1 cm). */
+function floorPatterns(u, mode) {
+  const n = mode === "night";
+  const line = n ? "rgba(255,255,255,0.16)" : "rgba(70,55,40,0.28)";
+  const fine = n ? "rgba(255,255,255,0.08)" : "rgba(70,55,40,0.14)";
+  const pat = (id, w, h, body) => `<pattern id="fl-${u}-${id}" width="${w}" height="${h}" patternUnits="userSpaceOnUse">${body}</pattern>`;
+  const tint = (c, a) => `<rect width="100%" height="100%" fill="${c}" fill-opacity="${n ? a * 0.6 : a}"/>`;
+  const wood = n ? "#8a6a48" : "#c4935c";
+  return [
+    // Carpet: an even soft tone with a fine weave.
+    pat("carpet", 6, 6, `${tint(n ? "#7a8296" : "#aab2c4", 0.55)}<circle cx="1.5" cy="1.5" r="0.8" fill="${fine}"/><circle cx="4.5" cy="4.5" r="0.8" fill="${fine}"/>`),
+    // Tiles: 30 x 30 cm, light with grout lines.
+    pat("tiles", 30, 30, `${tint("#ffffff", 0.45)}<path d="M30 0 V30 M0 30 H30" stroke="${line}" stroke-width="1.4"/>`),
+    // Klinker: 60 x 60 cm, warm grey stone.
+    pat("klinker", 60, 60, `${tint(n ? "#7a6f66" : "#bfae9c", 0.5)}<path d="M60 0 V60 M0 60 H60" stroke="${line}" stroke-width="2"/>`),
+    // Plank floor: 20 cm wide boards, joints staggered row by row.
+    pat("wood", 180, 40, `${tint(wood, 0.45)}<path d="M0 20 H180 M0 40 H180 M120 0 V20 M50 20 V40 M170 20 V40" stroke="${line}" stroke-width="1.1"/><path d="M10 7 H90 M130 13 H170 M20 30 H45 M70 27 H150" stroke="${fine}" stroke-width="0.8"/>`),
+    // Herringbone: short blocks in zigzag rows.
+    pat("herringbone", 40, 12, `${tint(wood, 0.45)}<path d="M0 12 L20 0 L40 12" stroke="${line}" stroke-width="1.1" fill="none"/><path d="M10 6 L13.6 12 M30 6 L26.4 12 M0 0 L3.6 6 M40 0 L36.4 6" stroke="${line}" stroke-width="1"/>`),
+    // Laminate: long, light boards.
+    pat("laminate", 240, 20, `${tint(n ? "#9a8a72" : "#d8c29c", 0.45)}<path d="M0 20 H240 M160 0 V20" stroke="${line}" stroke-width="1"/>`),
+  ].join("");
+}
 
 function furnitureSize(f) {
   const spec = FURNITURE[f.type] || { w: 80, h: 60, z: 40 };
@@ -379,6 +417,11 @@ function furnitureDrawing(type, w, h, q, part = "all") {
       out.push(`<circle cx="${w / 2}" cy="10" r="4" fill="${q.fur}"/>`);
       break;
     }
+    case "tv":
+      // Seen from above: a thin dark panel; the screen faces y = h.
+      out.push(R(0, 0, w, h, q.screen, 2));
+      out.push(L(3, h - 1.5, w - 3, h - 1.5, `stroke="${q.screenEdge}"`));
+      break;
     case "coffee_table":
       out.push(R(0, 0, w, h, q.wood, 8));
       out.push(R(5, 5, w - 10, h - 10, "none", 5, 'stroke-opacity="0.5"'));
@@ -582,7 +625,7 @@ class Renderer {
     const q = FURN_PALETTE[this.mode()];
     const u = this.uid;
     const glowStrength = c.glow_strength === undefined ? 1 : Number(c.glow_strength);
-    const out = { defs: [], floor: [], ao: [], shadows: [], glow: [], pulses: [], labels: [], hits: [], furniture: [], furnitureFloor: [], openings: "", p, q };
+    const out = { defs: [], floor: [], ao: [], shadows: [], glow: [], tvlight: [], pulses: [], labels: [], hits: [], furniture: [], furnitureFloor: [], openings: "", p, q };
     const shade = c.shading !== false;
     const ww = c.wall_width || 24;
 
@@ -604,6 +647,12 @@ class Renderer {
         <stop offset="0.55" stop-color="#000" stop-opacity="0"/>
         <stop offset="1" stop-color="#000" stop-opacity="${this.mode() === "night" ? 0.32 : 0.2}"/>
       </linearGradient>`);
+    out.defs.push(floorPatterns(u, this.mode()));
+    out.defs.push(`<linearGradient id="tvl-${u}" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#fff" stop-opacity="${this.mode() === "night" ? 0.6 : 0.75}"/>
+        <stop offset="0.45" stop-color="#eef4ff" stop-opacity="${this.mode() === "night" ? 0.25 : 0.32}"/>
+        <stop offset="1" stop-color="#eef4ff" stop-opacity="0"/>
+      </linearGradient>`);
     out.defs.push(`<clipPath id="cpall-${u}">${c.rooms.filter((r) => r.points.length >= 3).map((r) => `<polygon points="${r.points.map((v) => v.join(",")).join(" ")}"/>`).join("")}</clipPath>`);
 
     c.rooms.forEach((r, i) => {
@@ -612,6 +661,7 @@ class Renderer {
       out.defs.push(`<clipPath id="cp-${u}-${i}"><polygon points="${pts}"/></clipPath>`);
       // Walls are drawn separately (same geometry as in 3D), so floors get only a hairline.
       out.floor.push(`<polygon points="${pts}" fill="url(#f-${u})" stroke="${p.floorB}" stroke-width="1.5" stroke-linejoin="miter"/>`);
+      if (FLOORS[r.floor]) out.floor.push(`<polygon points="${pts}" fill="url(#fl-${u}-${r.floor})" pointer-events="none"/>`);
       // Ambient occlusion: the floor darkens softly towards the walls.
       if (shade) out.ao.push(`<g clip-path="url(#cp-${u}-${i})"><polygon points="${pts}" fill="none" stroke="#000" stroke-width="${(ww * 2.2).toFixed(1)}" stroke-linejoin="round" filter="url(#ao-${u})"/></g>`);
     });
@@ -628,6 +678,11 @@ class Renderer {
     c.furniture.forEach((f) => {
       const [w, h] = furnitureSize(f);
       const t = furnitureTransform(f, w, h);
+      if (f.type === "tv" && this.tvOn(f)) {
+        // A soft white cone of light on the floor in front of the screen.
+        const L = Math.max(120, w * 1.4);
+        out.tvlight.push(`<g transform="${t}"><polygon points="${w * 0.08},${h} ${w * 0.92},${h} ${w * 1.35},${h + L} ${-w * 0.35},${h + L}" fill="url(#tvl-${u})" filter="url(#cs-${u})"/></g>`);
+      }
       if (this.is3d) {
         if (FURNITURE[f.type] && FURNITURE[f.type].chairs) out.furnitureFloor.push(`<g transform="${t}">${furnitureDrawing(f.type, w, h, q, "floor")}</g>`);
       } else {
@@ -754,6 +809,7 @@ class Renderer {
       ${this.depthLayer(P)}
       <g pointer-events="none">${P.furniture.join("")}</g>
       <g>${P.glow.join("")}</g>
+      <g pointer-events="none">${P.tvlight.join("")}</g>
       <g>${roomPulses.join("")}</g>
       <g filter="url(#shw-${u})">${this.walls2d(P.p)}</g>
       ${P.openings}
@@ -1172,6 +1228,12 @@ class Renderer {
         const [l, t2, r2, b2] = spec.inset;
         corners = [[l, t2], [w - r2, t2], [w - r2, h - b2], [l, h - b2]].map(([lx, ly]) => furnitureLocalToWorld(f, w, h, lx, ly));
       }
+      if (spec.tv) {
+        const on = this.tvOn(f);
+        const scr = on ? { top: q.screen, side: "#dfe9ff", side2: "#c9d8f5", edge: q.screenEdge } : { top: q.screen, side: q.screen, side2: q.screen, edge: q.screenEdge };
+        items.push({ d: v.depth(cx, cy), foot: corners, svg: this.prism(corners, 0, z, scr) });
+        return;
+      }
       const body = this.prism(corners, 0, z, furnCol, { noTop: true });
       const top = `<g transform="${v.matrix(z)}"><g transform="${furnitureTransform(f, w, h)}">${furnitureDrawing(f.type, w, h, q, "top")}</g></g>`;
       items.push({ d: v.depth(cx, cy), foot: furnitureCorners(f, w, h), svg: body + top });
@@ -1195,6 +1257,7 @@ class Renderer {
         ${P.openings}
         <g pointer-events="none">${P.furnitureFloor.join("")}</g>
         <g>${P.glow.join("")}</g>
+        <g pointer-events="none">${P.tvlight.join("")}</g>
       </g>
       <g pointer-events="none">${pits.join("")}</g>
       <g transform="${v.matrix(0)}">
@@ -1337,9 +1400,23 @@ class Renderer {
       .join("");
   }
 
+  /**
+   * A TV is "on" when its entity uses more than standby: a power sensor above
+   * `threshold` watts (default 5), or a media player / switch that is on.
+   */
+  tvOn(f) {
+    if (!f.entity) return false;
+    const s = this.st(f.entity);
+    if (!s) return false;
+    const n = parseFloat(s.state);
+    if (!isNaN(n)) return n > (f.threshold === undefined ? 5 : Number(f.threshold));
+    return ["on", "playing", "paused", "idle", "buffering"].includes(s.state);
+  }
+
   /** A compact signature of the states the card depends on, to skip needless re-renders. */
   signature() {
     const ids = new Set(["sun.sun"]);
+    this.c.furniture.forEach((f) => f.entity && ids.add(f.entity));
     this.c.devices.forEach((d) => ids.add(d.entity));
     this.c.rooms.forEach((r) => {
       r.motion.forEach((m) => ids.add(m));
@@ -2484,6 +2561,8 @@ class GlowFloorplanCardEditor extends HTMLElement {
     if (key === "w") inp.value ? (f.w = Math.max(10, Number(inp.value))) : delete f.w;
     if (key === "h") inp.value ? (f.h = Math.max(10, Number(inp.value))) : delete f.h;
     if (key === "rotation") Number(inp.value) ? (f.rotation = Number(inp.value)) : delete f.rotation;
+    if (key === "entity") inp.value.trim() ? (f.entity = inp.value.trim()) : delete f.entity;
+    if (key === "threshold") inp.value === "" ? delete f.threshold : (f.threshold = Number(inp.value));
     // Keep the centre in place when the size changes.
     const [nw, nh] = furnitureSize(f);
     f.x = Math.round(cx - nw / 2);
@@ -2561,6 +2640,8 @@ class GlowFloorplanCardEditor extends HTMLElement {
         <h3>Møbel</h3>
         <label>Type</label><select data-f="type">${Object.entries(FURNITURE).map(([k, v]) => `<option value="${k}" ${f.type === k ? "selected" : ""}>${v.name}</option>`).join("")}</select>
         <label>Størrelse</label><div class="grid2"><input data-f="w" type="number" title="Bredde" value="${w}"><input data-f="h" type="number" title="Dybde" value="${h}"></div>
+        ${f.type === "tv" ? `<label>Enhed</label><input data-f="entity" list="ents" placeholder="sensor.fjernsyn_power (valgfri)" value="${esc(f.entity || "")}">
+        <label>Standby under</label><div class="grid2"><input data-f="threshold" type="number" step="0.5" placeholder="5" value="${f.threshold === undefined ? "" : f.threshold}"><span class="hint">W – over det lyser skærmen</span></div>` : ""}
         <label>Drejning</label><select data-f="rotation">${[0, 90, 180, 270].map((r) => `<option value="${r}" ${rot === r ? "selected" : ""}>${r}°</option>`).join("")}${[0, 90, 180, 270].includes(rot) ? "" : `<option value="${rot}" selected>${rot}°</option>`}</select>
         <div class="row">
           <button data-act="rot-left">↺ 90°</button>
@@ -2615,6 +2696,7 @@ class GlowFloorplanCardEditor extends HTMLElement {
       <label>Navn</label><input data-r="name" value="${esc(room.name || "")}">
       <label>Bevægelse</label><input data-r="motion" list="motion-ents" placeholder="binary_sensor.x, binary_sensor.y" value="${esc(room.motion.join(", "))}">
       <label>Tryk på rum</label><input data-r="entity" list="ents" placeholder="fx light.stue (valgfri)" value="${esc(room.entity || "")}">
+      <label>Gulv</label><select data-r="floor"><option value="">Standard</option>${Object.entries(FLOORS).map(([k, v]) => `<option value="${k}" ${room.floor === k ? "selected" : ""}>${v}</option>`).join("")}</select>
       <label>Vis navn</label><input data-r="show_name" type="checkbox" ${room.show_name === false ? "" : "checked"}>
       <div class="row">
         <button data-act="add-vertex">+ Hjørne</button>
@@ -2655,6 +2737,7 @@ class GlowFloorplanCardEditor extends HTMLElement {
     if (key === "motion") room.motion = v ? v.split(",").map((s) => s.trim()).filter(Boolean) : [];
     if (key === "entity") v ? (room.entity = v) : delete room.entity;
     if (key === "show_name") v ? delete room.show_name : (room.show_name = false);
+    if (key === "floor") v ? (room.floor = v) : delete room.floor;
     this._emit();
     this._renderStage();
   }

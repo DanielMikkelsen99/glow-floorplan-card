@@ -1,4 +1,4 @@
-// Renders images/preview-1.6.png for the README (2D and 3D, by day and at night).
+// Renders images/preview-1.7.png for the README (2D and 3D, by day and at night).
 const { chromium } = require('/opt/npm-tools/node_modules/playwright');
 const fs = require('fs');
 const cfg = JSON.parse(fs.readFileSync(__dirname + '/example.json', 'utf8'));
@@ -10,11 +10,14 @@ cfg.furniture = [
   { type: 'kitchen_counter', x: 265, y: 950, w: 150, rotation: 180 }, { type: 'toilet', x: 175, y: 1110, rotation: 90 },
   { type: 'shower', x: 115, y: 1025 }, { type: 'sofa_3', x: 640, y: 520, rotation: 90 },
   { type: 'stairs_down', x: 290, y: 560, w: 80, h: 220 },
+  { type: 'tv', x: 430, y: 845, rotation: 180, entity: 'sensor.tv_power' },
 ];
+const FL = { Living: 'herringbone', Dining: 'wood', Kitchen: 'klinker', WC: 'tiles', Bedroom: 'carpet', Kids: 'laminate', Hall: 'klinker', Sunroom: 'tiles' };
+cfg.rooms.forEach((r) => { if (FL[r.name]) r.floor = FL[r.name]; });
 cfg.doors = [{ type: 'door', line: [100, 760, 100, 840], sensor: 'binary_sensor.front_door' },
   { type: 'window', line: [597, 600, 597, 690] }, { type: 'window', line: [380, 110, 480, 110], leaves: 2 }];
 const S = (night) => ({ 'sun.sun': { state: night ? 'below_horizon' : 'above_horizon', attributes: {} },
-  'binary_sensor.front_door': { state: 'on', attributes: {} }, 'vacuum.robot': { state: 'cleaning', attributes: {} },
+  'binary_sensor.front_door': { state: 'on', attributes: {} }, 'sensor.tv_power': { state: '96', attributes: { unit_of_measurement: 'W' } }, 'vacuum.robot': { state: 'cleaning', attributes: {} },
   'light.kitchen': { state: 'on', attributes: { brightness: 230, color_temp_kelvin: 2700 } },
   'light.bedroom_ceiling': { state: 'on', attributes: { brightness: 180, rgb_color: [140, 90, 255] } },
   'light.corner_1': { state: 'on', attributes: { brightness: 120, rgb_color: [255, 80, 40] } },
@@ -62,6 +65,6 @@ const S = (night) => ({ 'sun.sun': { state: night ? 'below_horizon' : 'above_hor
     return { x, y, width: Math.max(...rs.map((r) => r.right)) - x, height: Math.max(...rs.map((r) => r.bottom)) - y };
   });
   await page.setViewportSize({ width: 1460, height: Math.ceil(box.y + box.height + 40) });
-  await page.screenshot({ path: (process.argv[2] || __dirname + '/../images/preview-1.6.png'), clip: { x: box.x - 8, y: box.y - 8, width: box.width + 16, height: box.height + 16 } });
+  await page.screenshot({ path: (process.argv[2] || __dirname + '/../images/preview-1.7.png'), clip: { x: box.x - 8, y: box.y - 8, width: box.width + 16, height: box.height + 16 } });
   await b.close();
 })();
