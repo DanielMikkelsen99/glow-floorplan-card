@@ -261,9 +261,151 @@ const FLOORS = {
 };
 
 const FURN_PALETTE = {
-  day: { fur: "#ffffff", line: "#b3bccd", accent: "#dde3ee", soft: "#f3f5f9", wood: "#e8dcc9", metal: "#c7ced9", side: "#d6dce7", side2: "#c6cdda", screen: "#2a2f3a", screenEdge: "#565e70" },
-  night: { fur: "#586176", line: "#7d879e", accent: "#4a5368", soft: "#525b70", wood: "#635a4c", metal: "#6d778d", side: "#434b5e", side2: "#3a4253", screen: "#1a1d25", screenEdge: "#3d4456" },
+  day: { fur: "#ffffff", line: "#b3bccd", accent: "#dde3ee", soft: "#f3f5f9", wood: "#e8dcc9", metal: "#c7ced9", side: "#d6dce7", side2: "#c6cdda", screen: "#2a2f3a", screenEdge: "#565e70", woodSide: "#d6c2a4", woodSide2: "#c7b08f", fabric: "#d3dae6", fabricSide: "#bfc7d6", fabricSide2: "#aeb7c8", leg: "#9aa3b3" },
+  night: { fur: "#586176", line: "#7d879e", accent: "#4a5368", soft: "#525b70", wood: "#635a4c", metal: "#6d778d", side: "#434b5e", side2: "#3a4253", screen: "#1a1d25", screenEdge: "#3d4456", woodSide: "#544b3e", woodSide2: "#4a4236", fabric: "#4e566a", fabricSide: "#424a5c", fabricSide2: "#3a4152", leg: "#2f3544" },
 };
+
+/** Colours for a 3D furniture part by material. */
+function partColors(kind, q) {
+  switch (kind) {
+    case "wood": return { top: q.wood, side: q.woodSide, side2: q.woodSide2, edge: q.line, tex: "wood" };
+    case "fabric": return { top: q.fabric, side: q.fabricSide, side2: q.fabricSide2, edge: q.line, tex: "fabric" };
+    case "cushion": return { top: q.fur, side: q.accent, side2: q.fabricSide, edge: q.line, tex: "fabric" };
+    case "soft": return { top: q.soft, side: q.accent, side2: q.fabricSide, edge: q.line };
+    case "leg": return { top: q.leg, side: q.leg, side2: q.leg, edge: "none" };
+    case "screen": return { top: q.screen, side: q.screen, side2: q.screen, edge: q.screenEdge };
+    case "plinth": return { top: q.side2, side: q.side2, side2: q.side2, edge: "none" };
+    default: return { top: q.fur, side: q.side, side2: q.side2, edge: q.line };
+  }
+}
+
+/**
+ * 3D build of a piece as boxes in local coordinates:
+ * [x0, y0, x1, y1, z0, z1, material]. The back is at y = 0, the front at y = h.
+ * Returns null for pieces that stay a simple box.
+ */
+function furniture3dParts(type, w, h, z, q) {
+  const P = [];
+  const add = (x0, y0, x1, y1, z0, z1, m) => x1 - x0 > 0.5 && y1 - y0 > 0.5 && z1 - z0 > 0.2 && P.push([x0, y0, x1, y1, z0, z1, m]);
+  const legs = (x0, y0, x1, y1, z1, t = 4, inset = 3) => {
+    add(x0 + inset, y0 + inset, x0 + inset + t, y0 + inset + t, 0, z1, "leg");
+    add(x1 - inset - t, y0 + inset, x1 - inset, y0 + inset + t, 0, z1, "leg");
+    add(x0 + inset, y1 - inset - t, x0 + inset + t, y1 - inset, 0, z1, "leg");
+    add(x1 - inset - t, y1 - inset - t, x1 - inset, y1 - inset, 0, z1, "leg");
+  };
+  const chair = (x0, y0, x1, y1, backAt) => {
+    // A chair: four legs, a seat and a backrest on the side away from the table.
+    legs(x0, y0, x1, y1, 26, 2.5, 1.5);
+    add(x0, y0, x1, y1, 26, 30, "wood");
+    if (backAt === "top") add(x0, y0, x1, y0 + 3, 30, 52, "wood");
+    if (backAt === "bottom") add(x0, y1 - 3, x1, y1, 30, 52, "wood");
+    if (backAt === "left") add(x0, y0, x0 + 3, y1, 30, 52, "wood");
+    if (backAt === "right") add(x1 - 3, y0, x1, y1, 30, 52, "wood");
+  };
+  switch (type) {
+    case "sofa_2":
+    case "sofa_3":
+    case "armchair": {
+      const seats = type === "sofa_3" ? 3 : type === "sofa_2" ? 2 : 1;
+      const a = Math.min(16, w * 0.14);
+      const b = h * 0.28;
+      add(0, 0, w, b, 4, z, "fabric");
+      add(0, b, a, h, 4, z * 0.68, "fabric");
+      add(w - a, b, w, h, 4, z * 0.68, "fabric");
+      add(a, b, w - a, h, 4, z * 0.4, "fabric");
+      legs(0, 0, w, h, 4, 4, 2);
+      const sw = (w - 2 * a - 3 * (seats - 1)) / seats;
+      for (let i = 0; i < seats; i++) add(a + i * (sw + 3), b + 1, a + i * (sw + 3) + sw, h - 3, z * 0.4, z * 0.56, "cushion");
+      return P;
+    }
+    case "sofa_corner": {
+      const D = Math.min(75, w * 0.45, h * 0.45);
+      const a = 14;
+      const b = D * 0.28;
+      add(0, 0, w, b, 4, z, "fabric");
+      add(0, b, b, h, 4, z, "fabric");
+      add(w - a, b, w, D, 4, z * 0.68, "fabric");
+      add(b, h - a, D, h, 4, z * 0.68, "fabric");
+      add(b, b, w - a, D, 4, z * 0.4, "fabric");
+      add(b, D, D, h - a, 4, z * 0.4, "fabric");
+      legs(0, 0, w, h, 4, 4, 2);
+      const top = (w - a - D - 3) / 2;
+      for (let i = 0; i < 2; i++) add(D + i * (top + 3), b + 1, D + i * (top + 3) + top, D - 2, z * 0.4, z * 0.56, "cushion");
+      add(b + 1, b + 1, D - 2, D - 2, z * 0.4, z * 0.56, "cushion");
+      add(b + 1, D + 1, D - 2, h - a - 2, z * 0.4, z * 0.56, "cushion");
+      return P;
+    }
+    case "single_bed":
+    case "double_bed": {
+      const n = type === "double_bed" ? 2 : 1;
+      add(0, 0, w, h * 0.05, 0, z * 2.1, "wood");
+      add(0, h * 0.05, w, h, 4, z * 0.45, "wood");
+      legs(0, h * 0.05, w, h, 4, 5, 2);
+      add(3, h * 0.05, w - 3, h - 3, z * 0.45, z * 0.95, "soft");
+      const gap = 6;
+      const pw = (w - 12 - gap * (n - 1)) / n;
+      for (let i = 0; i < n; i++) add(6 + i * (pw + gap), h * 0.09, 6 + i * (pw + gap) + pw, h * 0.24, z * 0.95, z * 1.2, "cushion");
+      add(3, h * 0.3, w - 3, h - 3, z * 0.95, z * 1.08, "fabric");
+      return P;
+    }
+    case "dining_table": {
+      const c = 18;
+      add(c, c, w - c, h - c, z - 4, z, "wood");
+      legs(c, c, w - c, h - c, z - 4, 5, 4);
+      const nC = Math.max(1, Math.round((w - 2 * c) / 55));
+      const step = (w - 2 * c) / nC;
+      for (let i = 0; i < nC; i++) {
+        const x = c + step * i + (step - 30) / 2;
+        chair(x, 1, x + 30, c + 6, "top");
+        chair(x, h - c - 6, x + 30, h - 1, "bottom");
+      }
+      if (h - 2 * c >= 30) {
+        chair(1, h / 2 - 15, c + 6, h / 2 + 15, "left");
+        chair(w - c - 6, h / 2 - 15, w - 1, h / 2 + 15, "right");
+      }
+      return P;
+    }
+    case "desk": {
+      const dh = h - 42;
+      add(0, 0, w, dh, z - 3, z, "wood");
+      add(0, 0, 3, dh, 0, z - 3, "wood");
+      add(w - 3, 0, w, dh, 0, z - 3, "wood");
+      add(w * 0.3, dh * 0.12, w * 0.7, dh * 0.18, z + 4, z + 36, "screen");
+      add(w * 0.48, dh * 0.15, w * 0.52, dh * 0.3, z, z + 6, "leg");
+      const cx = w / 2;
+      const cy = dh + 22;
+      add(cx - 2.5, cy - 2.5, cx + 2.5, cy + 2.5, 2, 40, "leg");
+      add(cx - 14, cy - 14, cx + 14, cy + 14, 0, 2, "leg");
+      add(cx - 15, cy - 13, cx + 15, cy + 12, 40, 46, "cushion");
+      add(cx - 15, cy + 12, cx + 15, cy + 18, 44, 82, "fabric");
+      return P;
+    }
+    case "coffee_table":
+      add(0, 0, w, h, z - 4, z, "wood");
+      legs(0, 0, w, h, z - 4, 4, 4);
+      add(5, 5, w - 5, h - 5, 10, 12, "wood");
+      return P;
+    case "dresser": {
+      add(0, 0, w, h - 1, 4, z, "wood");
+      legs(0, 0, w, h - 1, 4, 4, 2);
+      const k = (z - 8) / 3;
+      for (let i = 0; i < 3; i++) add(2, h - 1, w - 2, h, 6 + i * k + 1, 6 + (i + 1) * k - 1, "wood");
+      return P;
+    }
+    case "cabinet":
+      add(0, 0, w, h - 1, 0, z, "box");
+      add(2, h - 1, w / 2 - 1, h, 4, z - 4, "soft");
+      add(w / 2 + 1, h - 1, w - 2, h, 4, z - 4, "soft");
+      return P;
+    case "kitchen_counter":
+      add(0, 0, w, h - 6, 0, 10, "plinth");
+      add(0, 0, w, h - 2, 10, z - 4, "box");
+      add(0, 0, w, h, z - 4, z, "wood");
+      return P;
+    default:
+      return null;
+  }
+}
 
 /** SVG patterns for the floor materials, in plan units (1 unit ≈ 1 cm). */
 function floorPatterns(u, mode) {
@@ -578,6 +720,75 @@ class Renderer {
     this.edit = !!opts.edit;
     this.is3d = !!opts.is3d;
     this.uid = opts.uid || Math.random().toString(36).slice(2, 8);
+    // On the dashboard, nudge furniture out of walls and out of each other.
+    // The editor shows the positions exactly as saved.
+    if (!this.edit && config.avoid_overlap !== false && config.furniture && config.furniture.length)
+      this.c = { ...config, furniture: this.resolveFurniture() };
+  }
+
+  /**
+   * Moves each piece the shortest way out of walls and the pieces before it.
+   * Shapes are the real parts (an L-sofa leaves its corner free), so a coffee
+   * table in front of the sofa stays put. A piece that would have to move
+   * further than 80 units is left where it is.
+   */
+  resolveFurniture() {
+    const q = FURN_PALETTE.day;
+    const t = (this.c.wall_width || 24) * 0.55;
+    const obstacles = [];
+    for (const sg of this.wallSegments()) {
+      if (sg.kind === "gap") continue;
+      const [ax, ay] = sg.a;
+      const [bx, by] = sg.b;
+      const th = (sg.thick || t) / 2;
+      if (Math.abs(ax - bx) < 1) obstacles.push([ax - th, Math.min(ay, by), ax + th, Math.max(ay, by)]);
+      else if (Math.abs(ay - by) < 1) obstacles.push([Math.min(ax, bx), ay - th, Math.max(ax, bx), ay + th]);
+    }
+    const rectsOf = (f, dx, dy) => {
+      const [w, h, spec] = furnitureSize(f);
+      const parts = furniture3dParts(f.type, w, h, spec.z, q);
+      const boxes = parts ? parts.filter((p) => p[5] > 3).map((p) => [p[0], p[1], p[2], p[3]]) : [[0, 0, w, h]];
+      return boxes.map(([x0, y0, x1, y1]) => {
+        const pts = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]].map(([lx, ly]) => furnitureLocalToWorld(f, w, h, lx, ly));
+        const xs = pts.map((p) => p[0] + dx);
+        const ys = pts.map((p) => p[1] + dy);
+        return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
+      });
+    };
+    const out = [];
+    for (const f0 of this.c.furniture) {
+      const f = { ...f0 };
+      const [w, h] = furnitureSize(f);
+      let dx = 0;
+      let dy = 0;
+      for (let it = 0; it < 16; it++) {
+        const mine = rectsOf(f, dx, dy);
+        let hit = null;
+        for (const r of mine) {
+          for (const o of obstacles) {
+            const ox = Math.min(r[2], o[2]) - Math.max(r[0], o[0]);
+            const oy = Math.min(r[3], o[3]) - Math.max(r[1], o[1]);
+            if (ox > 0.5 && oy > 0.5) {
+              hit = { o, ox, oy };
+              break;
+            }
+          }
+          if (hit) break;
+        }
+        if (!hit) break;
+        const [ocx, ocy] = [(hit.o[0] + hit.o[2]) / 2, (hit.o[1] + hit.o[3]) / 2];
+        const [pcx, pcy] = [f.x + w / 2 + dx, f.y + h / 2 + dy];
+        if (hit.ox < hit.oy) dx += (pcx >= ocx ? 1 : -1) * (hit.ox + 0.5);
+        else dy += (pcy >= ocy ? 1 : -1) * (hit.oy + 0.5);
+      }
+      if (Math.abs(dx) + Math.abs(dy) <= 80) {
+        f.x += dx;
+        f.y += dy;
+      }
+      out.push(f);
+      if (f.type !== "stairs_down") obstacles.push(...rectsOf(f, 0, 0));
+    }
+    return out;
   }
 
   mode() {
@@ -648,6 +859,14 @@ class Renderer {
         <stop offset="1" stop-color="#000" stop-opacity="${this.mode() === "night" ? 0.32 : 0.2}"/>
       </linearGradient>`);
     out.defs.push(floorPatterns(u, this.mode()));
+    {
+      // Small screen-space textures for 3D furniture: woven fabric and wood grain.
+      const n = this.mode() === "night";
+      const ink = n ? "rgba(255,255,255,0.07)" : "rgba(40,50,70,0.09)";
+      const grain = n ? "rgba(255,255,255,0.06)" : "rgba(90,60,30,0.12)";
+      out.defs.push(`<pattern id="tx-${u}-fabric" width="3" height="3" patternUnits="userSpaceOnUse"><rect width="1.5" height="1.5" fill="${ink}"/><rect x="1.5" y="1.5" width="1.5" height="1.5" fill="${ink}"/></pattern>
+        <pattern id="tx-${u}-wood" width="26" height="6" patternUnits="userSpaceOnUse"><path d="M0 1.5 H11 M14 1.5 H26 M4 4.5 H20" stroke="${grain}" stroke-width="0.8"/></pattern>`);
+    }
     out.defs.push(`<linearGradient id="tvl-${u}" x1="0" y1="0" x2="0" y2="1">
         <stop offset="0" stop-color="#fff" stop-opacity="${this.mode() === "night" ? 0.6 : 0.75}"/>
         <stop offset="0.45" stop-color="#eef4ff" stop-opacity="${this.mode() === "night" ? 0.25 : 0.32}"/>
@@ -684,7 +903,7 @@ class Renderer {
         out.tvlight.push(`<g transform="${t}"><polygon points="${w * 0.08},${h} ${w * 0.92},${h} ${w * 1.35},${h + L} ${-w * 0.35},${h + L}" fill="url(#tvl-${u})" filter="url(#cs-${u})"/></g>`);
       }
       if (this.is3d) {
-        if (FURNITURE[f.type] && FURNITURE[f.type].chairs) out.furnitureFloor.push(`<g transform="${t}">${furnitureDrawing(f.type, w, h, q, "floor")}</g>`);
+        // Chairs are built as real 3D parts (furniture3dParts), nothing lies flat.
       } else {
         out.furniture.push(`<g transform="${t}">${furnitureDrawing(f.type, w, h, q)}</g>`);
         const spec = FURNITURE[f.type] || {};
@@ -1003,12 +1222,15 @@ class Renderer {
       const q = [v.proj(x1, y1, z0), v.proj(x2, y2, z0), v.proj(x2, y2, z1), v.proj(x1, y1, z1)];
       const qp = q.map((c) => c.map((n2) => n2.toFixed(1)).join(",")).join(" ");
       faces.push(`<polygon points="${qp}" fill="${lit ? colors.side : colors.side2}" ${opts.sideExtra || ""} stroke="${colors.edge || "none"}" stroke-width="1"/>`);
+      if (colors.tex) faces.push(`<polygon points="${qp}" fill="url(#tx-${this.uid}-${colors.tex})" pointer-events="none"/>`);
       // Height shading: a touch of light at the top edge, darker where the side meets the floor.
       if (this.c.shading !== false && !opts.flat && z1 - z0 > 8) faces.push(`<polygon points="${qp}" fill="url(#sd-${this.uid})" ${opts.sideExtra || ""}/>`);
     }
     if (!opts.noTop) {
       const top = corners.map(([x, y]) => v.proj(x, y, z1));
-      faces.push(`<polygon points="${top.map((c) => c.map((n2) => n2.toFixed(1)).join(",")).join(" ")}" fill="${colors.top}" ${opts.topExtra || ""} stroke="${colors.edge || "none"}" stroke-width="1"/>`);
+      const tp = top.map((c) => c.map((n2) => n2.toFixed(1)).join(",")).join(" ");
+      faces.push(`<polygon points="${tp}" fill="${colors.top}" ${opts.topExtra || ""} stroke="${colors.edge || "none"}" stroke-width="1"/>`);
+      if (colors.tex) faces.push(`<polygon points="${tp}" fill="url(#tx-${this.uid}-${colors.tex})" pointer-events="none"/>`);
     }
     return faces.join("");
   }
@@ -1103,6 +1325,63 @@ class Renderer {
       for (const m of after[pick]) indeg[m]--;
     }
     return out;
+  }
+
+  /**
+   * One piece of furniture built from several boxes (seat, back, legs...).
+   * Boxes whose footprints overlap are stacked, so the lower one is drawn first;
+   * the others are drawn back to front.
+   */
+  partsSvg(f, w, h, parts, q) {
+    const v = this.view3d();
+    const box = parts.map((p) => {
+      const corners = [[p[0], p[1]], [p[2], p[1]], [p[2], p[3]], [p[0], p[3]]].map(([lx, ly]) => furnitureLocalToWorld(f, w, h, lx, ly));
+      const xs = corners.map((c) => c[0]);
+      const ys = corners.map((c) => c[1]);
+      const mid = furnitureLocalToWorld(f, w, h, (p[0] + p[2]) / 2, (p[1] + p[3]) / 2);
+      return { p, corners, bb: [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)], d: v.depth(mid[0], mid[1]) };
+    });
+    box.forEach((bx) => {
+      const sx = bx.corners.map(([x, y]) => x * v.cos - y * v.sin);
+      bx.sx = [Math.min(...sx), Math.max(...sx)];
+      bx.c = [(bx.bb[0] + bx.bb[2]) / 2, (bx.bb[1] + bx.bb[3]) / 2];
+    });
+    const ovX = (a, b) => Math.min(a.bb[2], b.bb[2]) - Math.max(a.bb[0], b.bb[0]);
+    const ovY = (a, b) => Math.min(a.bb[3], b.bb[3]) - Math.max(a.bb[1], b.bb[1]);
+    // before(a, b): a must be drawn before b.
+    const before = (a, b) => {
+      if (ovX(a, b) > 0.5 && ovY(a, b) > 0.5) {
+        // Stacked (a seat under a table top, a mattress on a frame): the lower one first.
+        if (a.p[5] <= b.p[4] + 0.01) return true;
+        if (b.p[5] <= a.p[4] + 0.01) return false;
+        return a.d < b.d;
+      }
+      // Side by side on screen: they cannot cover each other.
+      if (a.sx[1] <= b.sx[0] + 0.5 || b.sx[1] <= a.sx[0] + 0.5) return false;
+      // Separated on the floor: the one nearer the viewer along the separating axis goes last.
+      if (ovX(a, b) <= 0.5 && Math.abs(v.sin) > 1e-3) return a.c[0] * v.sin < b.c[0] * v.sin;
+      if (ovY(a, b) <= 0.5 && Math.abs(v.cos) > 1e-3) return a.c[1] * v.cos < b.c[1] * v.cos;
+      return a.d < b.d;
+    };
+    const n = box.length;
+    const indeg = new Array(n).fill(0);
+    const nxt = box.map(() => []);
+    for (let i = 0; i < n; i++)
+      for (let j = 0; j < n; j++)
+        if (i !== j && before(box[i], box[j]) && !before(box[j], box[i])) {
+          nxt[i].push(j);
+          indeg[j]++;
+        }
+    const order = [];
+    const ready = box.map((_, i) => i).filter((i) => !indeg[i]);
+    while (ready.length) {
+      ready.sort((a, b) => box[a].d - box[b].d);
+      const i = ready.shift();
+      order.push(i);
+      for (const j of nxt[i]) if (!--indeg[j]) ready.push(j);
+    }
+    for (let i = 0; i < n; i++) if (!order.includes(i)) order.push(i);
+    return order.map((i) => this.prism(box[i].corners, box[i].p[4], box[i].p[5], partColors(box[i].p[6], q))).join("");
   }
 
   /**
@@ -1221,6 +1500,13 @@ class Renderer {
         }
         bands.sort((a, b) => a.d - b.d);
         items.push({ d: v.depth(cx, cy), foot: furnitureCorners(f, w, h), svg: bands.map((b) => b.svg).join("") });
+        return;
+      }
+      const parts = furniture3dParts(f.type, w, h, z, q);
+      if (parts) {
+        // The kitchen worktop keeps its sink and hob drawn on top.
+        const top = f.type === "kitchen_counter" ? `<g transform="${v.matrix(z)}"><g transform="${furnitureTransform(f, w, h)}">${furnitureDrawing(f.type, w, h, q, "top")}</g></g>` : "";
+        items.push({ d: v.depth(cx, cy), foot: furnitureCorners(f, w, h), svg: this.partsSvg(f, w, h, parts, q) + top });
         return;
       }
       let corners = furnitureCorners(f, w, h);

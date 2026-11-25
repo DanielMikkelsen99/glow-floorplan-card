@@ -161,6 +161,12 @@ For `stairs_down` the top step is at the back of the piece (y = 0 before rotatio
 
 Furniture is static: it is drawn like an architect's plan in 2D and as blocks in 3D.
 
+### Furniture in 3D
+
+In 3D the furniture is built from real parts instead of plain boxes: sofas and armchairs get a backrest, armrests, cushions and feet; beds a headboard, mattress, pillows and duvet; tables a top on legs, and the dining table real chairs with backrests; the desk a monitor and an office chair; dressers and cabinets drawer and door fronts. Fabric and wood have a light texture.
+
+On the dashboard, furniture that reaches into a wall or into another piece is moved the shortest way out (at most 80 units), so nothing sticks through walls or other furniture in 2D or 3D. The editor still shows the positions exactly as saved. Turn it off with `avoid_overlap: false`.
+
 ### Depth and shadows
 
 ![3D close-up: soft shadows, darker floor along the walls and stairs going down](https://raw.githubusercontent.com/DanielMikkelsen99/glow-floorplan-card/main/images/depth.png)
