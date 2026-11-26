@@ -10,7 +10,7 @@
  * License: MIT
  */
 
-const VERSION = "1.7.1";
+const VERSION = "1.7.2";
 const CARD_TAG = "glow-floorplan-card";
 const EDITOR_TAG = "glow-floorplan-card-editor";
 
@@ -867,10 +867,13 @@ class Renderer {
       out.defs.push(`<pattern id="tx-${u}-fabric" width="3" height="3" patternUnits="userSpaceOnUse"><rect width="1.5" height="1.5" fill="${ink}"/><rect x="1.5" y="1.5" width="1.5" height="1.5" fill="${ink}"/></pattern>
         <pattern id="tx-${u}-wood" width="26" height="6" patternUnits="userSpaceOnUse"><path d="M0 1.5 H11 M14 1.5 H26 M4 4.5 H20" stroke="${grain}" stroke-width="0.8"/></pattern>`);
     }
+    // TV light: white at night; by day a white glow vanishes on the light floor,
+    // so it is tinted the blue of a lit screen to stay visible.
+    const tvNight = this.mode() === "night";
     out.defs.push(`<linearGradient id="tvl-${u}" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0" stop-color="#fff" stop-opacity="${this.mode() === "night" ? 0.6 : 0.75}"/>
-        <stop offset="0.45" stop-color="#eef4ff" stop-opacity="${this.mode() === "night" ? 0.25 : 0.32}"/>
-        <stop offset="1" stop-color="#eef4ff" stop-opacity="0"/>
+        <stop offset="0" stop-color="${tvNight ? "#fff" : "#6f9cff"}" stop-opacity="${tvNight ? 0.6 : 0.55}"/>
+        <stop offset="0.45" stop-color="${tvNight ? "#eef4ff" : "#8fb3ff"}" stop-opacity="${tvNight ? 0.25 : 0.22}"/>
+        <stop offset="1" stop-color="${tvNight ? "#eef4ff" : "#8fb3ff"}" stop-opacity="0"/>
       </linearGradient>`);
     out.defs.push(`<clipPath id="cpall-${u}">${c.rooms.filter((r) => r.points.length >= 3).map((r) => `<polygon points="${r.points.map((v) => v.join(",")).join(" ")}"/>`).join("")}</clipPath>`);
 
@@ -1550,7 +1553,10 @@ class Renderer {
       }
       if (spec.tv) {
         const on = this.tvOn(f);
-        const scr = on ? { top: q.screen, side: "#dfe9ff", side2: "#c9d8f5", edge: q.screenEdge } : { top: q.screen, side: q.screen, side2: q.screen, edge: q.screenEdge };
+        // Lit: bright white-blue at night; by day a clear blue, as white would
+        // read as just another white piece of furniture.
+        const lit = this.mode() === "night" ? ["#dfe9ff", "#c9d8f5"] : ["#7fa9ff", "#6a95f0"];
+        const scr = on ? { top: q.screen, side: lit[0], side2: lit[1], edge: q.screenEdge } : { top: q.screen, side: q.screen, side2: q.screen, edge: q.screenEdge };
         items.push({ d: v.depth(cx, cy), foot: corners, z, svg: this.prism(corners, 0, z, scr) });
         return;
       }
